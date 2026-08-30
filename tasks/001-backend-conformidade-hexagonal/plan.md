@@ -246,12 +246,20 @@ Regras que o `/speckit-implement` deve cumprir:
 
 ### Encerramento
 
-- [ ] Nenhum arquivo em `**/domain/**` importa de `**/infra/**` (validado por lint em todos os serviços)
-- [ ] Nenhum arquivo em `**/applications/**` importa de `**/infra/**`
-- [ ] Todos os adapters `implements` um `domain/ports/output/*`
-- [ ] Nenhuma regra de negócio (condição de decisão) em `infra/adapters/*`
-- [ ] `src/config/` e `src/main.ts` padronizados nos 3 serviços
-- [ ] `beach-center-server` sobe os 3 serviços com hot-reload (`/run-server`)
+- [x] Nenhum arquivo em `**/domain/**` importa de `**/infra/**` — **usuarios** (lint) · pagamentos ⬜ · agendamentos ⬜
+- [x] Nenhum arquivo em `**/applications/**` importa de `**/infra/**` — **usuarios** · demais ⬜
+- [x] Todos os adapters `implements` um `domain/ports/output/*` — **usuarios**
+- [x] Nenhuma regra de negócio em `infra/adapters/*` — **usuarios**
+- [x] `src/config/` e `src/main.ts` padronizados — **usuarios**
+- [ ] `beach-center-server` sobe os serviços com hot-reload (`/run-server`) — **pendente**
+
+### `/speckit-complete` — Fase 1 (usuarios)
+
+- [x] Quality Gate Local: ESLint 0 erros · 191 testes verdes · cobertura 99,5% (≥80%) · testes de componente N/A (backend, sem UI)
+- [x] Commit `refactor(usuarios): conformidade com Arquitetura Hexagonal` em `beach-center-bff-usuarios` @ branch `feat/hexagonal-conformidade-usuarios` (132 arquivos) — pushed
+- [x] Commit `docs(speckit): task 001 ...` em `beach-center-ia` @ branch `feat/task-001-hexagonal` — pushed
+- [x] CI remota: nenhum `.github/workflows` nos repos → sem pipeline a aguardar
+- Restante da task: Fases 2 (`pagamentos`) e 3 (`agendamentos`) + `/run-server` + `/speckit-documentation`.
 
 ## Critérios de Aceite (formais)
 
