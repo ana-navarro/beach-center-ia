@@ -410,6 +410,18 @@ Regras que o `/speckit-implement` deve cumprir:
 - **`campeonatos` fora da constituição**: rodar `/speckit-constitution` depois para registrar
   ou remover o repositório.
 
+## `/speckit-complete` — Fases 2 (pagamentos) e 3 (agendamentos)
+
+- [x] Quality Gate Local **pagamentos**: ESLint 0 erros · 156 testes verdes · cobertura 98,3% (≥80%) · testes de componente N/A (backend, sem UI)
+- [x] Quality Gate Local **agendamentos**: ESLint 0 erros · 812 testes verdes · cobertura 99,24% (≥80%) · testes de componente N/A
+- [x] Commit `refactor(pagamentos): conformidade com Arquitetura Hexagonal` em `beach-center-bff-pagamentos` @ branch `feat/hexagonal-conformidade-pagamentos` (107 arquivos) — pushed
+- [x] Commit `refactor(agendamentos): conformidade com Arquitetura Hexagonal` em `beach-center-bff-agendamentos` @ branch `feat/hexagonal-conformidade-agendamentos` (380 arquivos) — pushed
+- [x] Commit `docs(speckit): task 001 — fases 2 e 3` em `beach-center-ia` @ branch `feat/task-001-hexagonal` — pushed
+- [x] CI remota: nenhum `.github/workflows` em nenhum dos 3 repos → sem pipeline a aguardar
+- Restante da task: `/run-server` (pendência de infraestrutura, Princípio IV) + `/speckit-documentation` para os 3 serviços.
+
 ## Próximo passo
 
-`/speckit-implement` — começar pela **Fase 0 + Fase 1 (usuarios)**.
+`/speckit-documentation` — mapear os endpoints dos 3 serviços e gerar/atualizar
+`beach-center-documentations/`. Depois, `/run-server` para verificar o hot-reload em
+`beach-center-server` (pendência registrada desde a Fase 1, nunca resolvida).
