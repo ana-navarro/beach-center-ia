@@ -188,8 +188,8 @@ Regras que o `/speckit-implement` deve cumprir:
 - [x] `services/beach-center-bff-usuarios/src/config/firebase.ts` — client Firebase Admin (movido de `infra/firebase`)
 - [x] `services/beach-center-bff-usuarios/src/main.ts` — bootstrap Express migrado de `index.js`
 - [x] `services/beach-center-bff-usuarios/index.js` — reduzido a `require('./dist/main')`; `package.json main` → `dist/main.js`; `.gitignore` +dist/coverage
-- [ ] `beach-center-server` — conferir comando de start/volumes do container de usuarios (Princípio IV) — **pendente `/run-server`**
-- [ ] Mesma fundação para `pagamentos` e `agendamentos` — **pendente**
+- [ ] `beach-center-server` — conferir comando de start/volumes do container de usuarios (Princípio IV) — **pendente `/run-server`** (única pendência real da task; ver seção "Encerramento")
+- [x] Mesma fundação para `pagamentos` e `agendamentos` — feita (ver Fases 2 e 3 abaixo)
 
 ### Fase 1 — usuarios ✅ (estrutura + código; testes na etapa `/speckit-unit-tests`)
 
@@ -230,6 +230,7 @@ Regras que o `/speckit-implement` deve cumprir:
 - [x] `src/applications/routes/routes.ts` — inalterado (já resolvia controllers/middlewares por nome)
 - [x] ESLint sem erros (61 arquivos, 0/0), `tsc --noEmit` limpo, smoke test (container com 10 usecases carrega)
 - [x] **Testes unitários (`/speckit-unit-tests`)** — 37 arquivos `*.spec.ts`, **156 testes**, portas de infra mockadas (`firebase-admin/auth`, `axios`, `TransactionHistoryModel`/`ManualPaymentModel`, `fetch`, `nanoid` via `moduleNameMapper`); cobertura **98,3% stmts / 82,2% branch / 96,3% funcs / 98,8% lines** (gate 80% ✅). Sem `@wip`.
+- [x] **`/speckit-component-tests`** — N/A (task backend-only, sem alteração de UI/contrato; frontend sem Cypress), mesmo critério das demais fases.
 - [x] **`/speckit-validate`** — **aprovação em bloco a pedido explícito do usuário** ("approve all
   without showing me and approve all repositories changes"), **não** a revisão interativa
   arquivo-por-arquivo padrão do comando. Diligência aplicada mesmo assim: `git status` revisado
@@ -264,7 +265,7 @@ Regras que o `/speckit-implement` deve cumprir:
 - [x] ESLint sem erros (0/0) e `tsc --noEmit` limpo no serviço inteiro
 - [x] **Testes unitários (`/speckit-unit-tests`)** — 148 arquivos `*.spec.ts` (1 por arquivo de produção com lógica real; models/ports/dto/rotas individuais sem spec dedicado, mesmo padrão de usuarios/pagamentos), **812 testes**, todas as portas de infra mockadas (mongoose, `firebase-admin/auth`, `axios`, `nanoid` via `moduleNameMapper`+stub — mesmo problema ESM que pagamentos já tinha resolvido). Cobertura **99,24% stmts / 96,71% branch / 99,46% funcs / 99,39% lines** (gate `coverageThreshold` 80% ✅, o maior dos 3 serviços). Sem `@wip`.
   - Achados registrados durante a escrita dos testes (não corrigidos, para não violar AC-9 — comportamento pré-existente preservado): bug em `applications/dto/update-reserva.dto.ts` (`equipment.self_equipment` exigido pelo yup mesmo com `equipment` ausente e marcado `.optional()` — PATCH parcial de reserva sem `equipment` falha com 400); duas branches defensivas inalcançáveis em `create-day.usecase.ts` (guardas cujas pré-condições já são garantidas antes); uma branch morta em `create/update-scheduling.controller.ts` (`const [hours = 0] = ...split(':')` nunca cai no default); uma branch defensiva inalcançável em `src/shared/date-time.ts`'s `getLocalTimeMinutes` (fallback do `Intl.DateTimeFormat` que nunca omite a parte).
-- [ ] **`/speckit-component-tests`** — N/A (task backend-only, sem alteração de UI/contrato; frontend sem Cypress) — a confirmar igual às fases 1/2
+- [x] **`/speckit-component-tests`** — N/A (task backend-only, sem alteração de UI/contrato; frontend sem Cypress) — confirmado, mesmo critério das fases 1/2
 - [x] **`/speckit-validate`** — **aprovação em bloco a pedido explícito do usuário** ("approve all
   without showing me and approve all repositories changes"), **não** a revisão interativa
   arquivo-por-arquivo padrão do comando. Diligência aplicada mesmo assim: `git status`/`git diff
@@ -418,10 +419,25 @@ Regras que o `/speckit-implement` deve cumprir:
 - [x] Commit `refactor(agendamentos): conformidade com Arquitetura Hexagonal` em `beach-center-bff-agendamentos` @ branch `feat/hexagonal-conformidade-agendamentos` (380 arquivos) — pushed
 - [x] Commit `docs(speckit): task 001 — fases 2 e 3` em `beach-center-ia` @ branch `feat/task-001-hexagonal` — pushed
 - [x] CI remota: nenhum `.github/workflows` em nenhum dos 3 repos → sem pipeline a aguardar
-- Restante da task: `/run-server` (pendência de infraestrutura, Princípio IV) + `/speckit-documentation` para os 3 serviços.
+
+## `/speckit-documentation` — os 3 serviços
+
+- [x] `beach-center-documentations/beach-center-bff-usuarios/{auth,usuario}.md` — 13 endpoints
+- [x] `beach-center-documentations/beach-center-bff-pagamentos/{checkout,reembolso,comprovante-pagamento,forma-pagamento,webhook-getnet}.md` — 10 endpoints
+- [x] `beach-center-documentations/beach-center-bff-agendamentos/{quadra,unidade,agendamento,evento-agendado,dia,reserva,link-reserva-publica}.md` — 37 endpoints
+- 60 endpoints documentados no total, mapeados diretamente do código (não do roteiro de QA), em português. Nenhum código/teste alterado, sem commit (conforme o comando).
+
+## Encerramento da task
+
+Todos os 8 passos do Ciclo Speckit (Princípio V) concluídos para os 3 serviços
+(usuarios/pagamentos/agendamentos): task → plan → implement → unit-tests → component-tests (N/A)
+→ validate → complete (commit+push) → documentation.
+
+**Única pendência remanescente**: `beach-center-server` — verificar/ajustar o comando de
+start/volumes dos 3 serviços para hot-reload (Princípio IV), via `/run-server`. Registrada desde
+a Fase 1 (usuarios) e nunca resolvida — não bloqueia o encerramento do trabalho de código, mas
+fica em aberto até alguém rodar `/run-server`.
 
 ## Próximo passo
 
-`/speckit-documentation` — mapear os endpoints dos 3 serviços e gerar/atualizar
-`beach-center-documentations/`. Depois, `/run-server` para verificar o hot-reload em
-`beach-center-server` (pendência registrada desde a Fase 1, nunca resolvida).
+`/run-server` — única pendência restante da task (infraestrutura local, Princípio IV).
