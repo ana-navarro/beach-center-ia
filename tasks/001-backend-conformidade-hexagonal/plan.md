@@ -211,47 +211,76 @@ Regras que o `/speckit-implement` deve cumprir:
   - Decisões confirmadas na revisão: mensagem de validação unificada em "Dados inválidos"; `statusCode` em `DomainError`; `main.ts` fora da cobertura; erro de infra no middleware agora → 500 (era 401).
   - Cleanups menores anotados (não bloqueantes, para uma próxima passada): `IUpdateAuthAvatarInput` não usado; `firebase-error.ts` poderia chamar-se `provider-error.ts`; `create-user.usecase` não usa `handleUsecaseError`; `rethrowProviderError` chamado sem `return` no `update-auth-user.adapter`; casts `as IUser`; shim `applications/utils/phone-number.ts`; injetar `FIREBASE_API_KEY` em vez de ler `config` no adapter.
 
-### Fase 2 — pagamentos
+### Fase 2 — pagamentos ✅ (estrutura + código + testes + validate)
 
-- [ ] `src/domain/models/**` — revisar; model de transação/pagamento se a regra pedir
-- [ ] `src/domain/ports/output/**` — `getnet/{auth,checkout,refund}`, `reserva/{create,read,update}`, `transaction-history`, `google-drive`, `manual-payment`
-- [ ] `src/domain/ports/input/**` — `create-checkout`, `create-refund`, `process-getnet-webhook`, `list-transaction-history`, `list-payment-methods`
-- [ ] `src/domain/usecases/**` — refatorar checkout/refund/webhook; criar usecases de transaction-history e payment-methods
-- [ ] `src/infra/adapters/**` — `getnet/*` e `reserva/*` implementam port; converter `infra/services/*` em adapters por ação
-- [ ] `src/infra/schemas/**` — revisar (`schemas/getnet/*` incluso)
-- [ ] `src/config/` — mover `src/applications/config/*` e `src/infra/firebase/*` para cá
-- [ ] `src/applications/dto/**` (4) — validação no controller
-- [ ] `src/applications/controllers/**` (5) — sem `infra/*`
-- [ ] `src/applications/routes/routes.ts` — usar `container`
-- [ ] `src/config/{env,container}.ts` — chaves Getnet/Drive + factories
-- [ ] ESLint do serviço sem erros
+> Status: **usuarios ✅ · pagamentos ✅ · agendamentos ✅**
 
-### Fase 3 — agendamentos
+- [x] **Fase 0** — `eslint.config.mjs` + `jest.config.ts` (copiados de usuarios), `package.json` scripts/devDeps, `tsconfig` (sem `jsx`, `types:[node,jest]`, `exclude`), `nodemon.json`, `.gitignore`, `index.js` → shim
+- [x] `src/domain/models/**` — `reserva.model` mantido; novos `payment.model` (checkout/refund/webhook/método), `manual-payment.model`, `transaction-log.model`, `user.model`; `errors.ts`
+- [x] `src/domain/ports/output/**` — `payment-gateway.port` (checkout+refund, retorno de domínio, não mais `IGetnetCheckoutResponse`), `reserve.port` (create/read/status/payment-metadata/public-link), `transaction-log.port`, `manual-payment-repository.port`, `file-storage.port`, `auth.port`
+- [x] `src/domain/ports/input/**` — `payment.input-port` (checkout/refund/webhook/payment-methods), `manual-payment.input-port` (submit/review/list/read/proof), `auth.input-port`
+- [x] `src/domain/usecases/**` — checkout/refund/webhook refatorados p/ depender só de ports (log de auditoria via `ITransactionLogPort`, sem `new TransactionHistoryService()`); **novos**: `submit-manual-payment` e `review-manual-payment` (extraídas do `transaction-history.controller` — autorização, validação de valor/slots, compensação, state machine), `list/read/proof-manual-payment`, `list-payment-methods`, `authenticate-request`
+- [x] `src/infra/adapters/**` — getnet `checkout`/`refund` (getnet+mock) `implements` port e retornam tipo de domínio; `reserve/*` split em 5 adapters (create, read, check-public-link, update-status, update-payment-metadata); `infra/services/*` convertidos em adapters: `transaction-log/mongo-transaction-log`, `manual-payment/mongo-manual-payment-repository` (com mapper p/ domínio; upload saiu daqui), `file-storage/google-drive-file-storage`; `auth/firebase-verify-id-token`, `user/find-user-by-firestore-id`
+- [x] `src/infra/schemas/**` — `user.schema` +mapper `toDomainUser`; `getnet/*`, `manual-payment`, `transaction-history` mantidos (wire formats)
+- [x] `src/config/` — `env.ts` (movido de `applications/config`, +`db`/`dotenv.config`), `firebase.ts` (movido de `infra/firebase`, lazy), `container.ts` (composition root; resolve gateway getnet/mock por `PAYMENT_PROVIDER`)
+- [x] `src/main.ts` — bootstrap Express (`express.json({limit:'12mb'})` preservado)
+- [x] `src/applications/dto/**` — mantidos (yup)
+- [x] `src/applications/controllers/**` (5, class-based) — sem `infra/*`; usam `container`; `transaction-history` reduzido a HTTP puro (o `proof` mantém redirect/buffer/headers); `handle-http-error` (formato yup `{message, errors}` deste serviço preservado)
+- [x] `src/applications/middlewares/auth.middleware.ts` — `authMiddleware`/`requireRole` via container; `internalApiKeyMiddleware`/`webhookTokenMiddleware`/`authOrInternalApiKey` mantidos (lendo `config/env`)
+- [x] `src/applications/routes/routes.ts` — inalterado (já resolvia controllers/middlewares por nome)
+- [x] ESLint sem erros (61 arquivos, 0/0), `tsc --noEmit` limpo, smoke test (container com 10 usecases carrega)
+- [x] **Testes unitários (`/speckit-unit-tests`)** — 37 arquivos `*.spec.ts`, **156 testes**, portas de infra mockadas (`firebase-admin/auth`, `axios`, `TransactionHistoryModel`/`ManualPaymentModel`, `fetch`, `nanoid` via `moduleNameMapper`); cobertura **98,3% stmts / 82,2% branch / 96,3% funcs / 98,8% lines** (gate 80% ✅). Sem `@wip`.
+- [x] **`/speckit-validate`** — **aprovação em bloco a pedido explícito do usuário** ("approve all
+  without showing me and approve all repositories changes"), **não** a revisão interativa
+  arquivo-por-arquivo padrão do comando. Diligência aplicada mesmo assim: `git status` revisado
+  em busca de segredos/arquivos indevidos (nenhum encontrado), `tsc --noEmit` limpo, `eslint .`
+  0 erros, suíte completa reexecutada (37 suítes / 156 testes verdes, cobertura confirmada igual
+  ao `/speckit-unit-tests`). 107 arquivos staged (`git add -A`), sem commit.
 
-- [ ] `src/domain/models/**` (6) — revisar; mover tipos de domínio de `infra/adapters/*/types`
-- [ ] `src/domain/ports/output/**` — 1 por ação de adapter (agrupadas por recurso, ver mapa)
-- [ ] `src/domain/ports/input/**` — 1 por usecase (34)
-- [ ] `src/domain/usecases/**` (34) — depender de ports
-- [ ] `src/domain/usecases/reserva/shared/reserve-scheduling.validator.ts` — sem import de `infra`
-- [ ] `src/domain/usecases/**/shared/**` — receber `scheduling-references.validator`, `event-conflict` (decisão), `apply/release-event-to-schedulings` vindos de `infra`
-- [ ] `src/infra/ports/index.ts` — barrel
-- [ ] `src/infra/adapters/**` (54) — `implements` port; remover lógica de decisão; apagar `types/`,`shared/`,`validators/` sob `infra/adapters/*` após migração
-- [ ] `src/infra/schemas/**` (8) — revisar
-- [ ] `src/config/` — mover `src/infra/firebase/*`
-- [ ] `src/applications/dto/**` (17) — padronizar `<ação>.dto.ts`
-- [ ] `src/applications/controllers/**` (35) — sem `infra/*`; renomear `update-reserve.ts` → `update-reserve.controller.ts`
-- [ ] `src/applications/routes/**` (7) — corrigir `court.rotes.ts`→`court.route.ts`, `unit.routes.ts`→`unit.route.ts`, ajustar `routes.ts`
-- [ ] `src/config/{env,container}.ts` — factories das ~34 ações
-- [ ] ESLint do serviço sem erros
+### Fase 3 — agendamentos ✅ (estrutura + código; testes na etapa `/speckit-unit-tests`)
+
+> Status: **usuarios ✅ · pagamentos ✅ · agendamentos ✅**. Implementado via
+> `tasks/001-backend-conformidade-hexagonal/agendamentos-architecture-spec.md` (desvio deliberado
+> e documentado do esboço abaixo: ports agrupados **um arquivo por recurso com várias interfaces**,
+> igual ao precedente real de usuarios/pagamentos, não um arquivo por ação como o esboço original
+> sugeria).
+
+- [x] **Fase 0** — `eslint.config.mjs` + `jest.config.ts` (copiados de usuarios), `package.json` scripts/devDeps, `tsconfig.json` (sem `jsx`, `types:[node,jest]`, `exclude`), `nodemon.json` (exec `src/main.ts`), `.gitignore` (+dist/coverage), `src/config/env.ts` (DB, PORT, FIREBASE_PROJECT_ID, PUBLIC_APP_URL, AGENDAMENTOS_INTERNAL_API_KEY, PAGAMENTOS_API_URL, PAGAMENTOS_INTERNAL_API_KEY), `src/config/firebase.ts` (movido de `infra/firebase/firebase-admin.ts`, sem cert — só `projectId`, comportamento preservado), `src/main.ts` (bootstrap Express migrado de `index.js`), `index.js` → shim `require('./dist/main')`
+- [x] `src/shared/date-time.ts` — kernel de utilitários puros de data/hora (merge de `local-date-time.ts`+`event-time.ts`+`isPastScheduling`)
+- [x] `src/domain/errors.ts` — `DomainError` + 5 subtipos (copiado de usuarios) + `CloseDateReserveConflictError`/`ICloseDateReserveConflict` (shape corrigido para bater 1:1 com a resposta original do close-date)
+- [x] `src/domain/usecases/shared/{handle-usecase-error,object-id}.ts`, `src/applications/controllers/shared/handle-http-error.ts`
+- [x] `src/domain/usecases/shared/{event-conflict.service,event-scheduling-impact.service,scheduling-availability.service,scheduling-references.validator,reserve-scheduling.validator,reserve-cancellation-window,update-reserve-and-scheduling-status.usecase}.ts` — regra de negócio migrada de `infra/adapters/**/shared` e `infra/adapters/**/validators`
+- [x] `src/domain/models/**` (court, unit, scheduling, events-scheduled, reserva, day, public-reserve-link) — tipos de domínio consolidados, sem tipos de mongoose/infra
+- [x] `src/domain/ports/output/**` (1 arquivo por recurso, várias interfaces) + `src/domain/ports/input/**` (1 por usecase) — court, unit, scheduling, events_scheduled, reserva, day, public-reserve-link, payment-refund, auth
+- [x] `src/domain/usecases/**` (court 4, unit 5, scheduling 5, events_scheduled 5, reserva 7, day 5, public-reserve-link 4, auth 1) — todos dependem de ports, nunca de adapters concretos
+- [x] `src/infra/adapters/**` — um adapter por verbo/ação (AC-5); adapters multi-método originais (`DeleteReserveAdapter`, `UpdateReserveAdapter`, `PublicReserveLinkAdapter`) splitados; `implements` o port de output correspondente; sem lógica de decisão
+- [x] `src/infra/schemas/**` (8) — mantidos, com mappers `toDomainX()` adicionados (padrão usuarios/pagamentos)
+- [x] `src/config/{env,firebase,container}.ts` — `container.ts` é o composition root único (~40 factories: adapters → serviços compartilhados → usecases leaf → reserva → day/public-reserve-link → auth)
+- [x] `src/applications/dto/**` (17) — mantidos; `get-protocol.dto.ts` (duplicata morta) e `reserva/list/list-query-params.types.ts` (duplicata) removidos; `reserva-equipment.mapper.ts` novo (dedupe de `formatEquipment` triplicado)
+- [x] `src/applications/controllers/**` (35) — sem `import .../infra/*`; usam `container` + ports de input; `update-reserve.ts`→`update-reserve.controller.ts`, `shared/update-status.ts`→`shared/update-reserve-and-scheduling-status.controller.ts`
+- [x] `src/applications/middlewares/auth.middleware.ts` + `internal-api-key.middleware.ts` — via `container.authenticateRequest`, sem import de `infra/*`; `adminOrInternalApiKey` (variante extra de agendamentos) preservada
+- [x] `src/applications/routes/**` (7) — `court.rotes.ts`→`court.route.ts`, `unit.routes.ts`→`unit.route.ts`; `routes.ts` ajustado; bloco morto comentado removido de `scheduling.route.ts`
+- [x] Arquivos órfãos apagados após migração: `infra/adapters/scheduling/shared/{past-schedulings,scheduling-availability}.ts`, `infra/adapters/scheduling/validators/`, `infra/adapters/events_scheduled/shared/{event-conflict,event-time,local-date-time}.ts`, `infra/firebase/firebase-admin.ts`
+- [x] ESLint sem erros (0/0) e `tsc --noEmit` limpo no serviço inteiro
+- [x] **Testes unitários (`/speckit-unit-tests`)** — 148 arquivos `*.spec.ts` (1 por arquivo de produção com lógica real; models/ports/dto/rotas individuais sem spec dedicado, mesmo padrão de usuarios/pagamentos), **812 testes**, todas as portas de infra mockadas (mongoose, `firebase-admin/auth`, `axios`, `nanoid` via `moduleNameMapper`+stub — mesmo problema ESM que pagamentos já tinha resolvido). Cobertura **99,24% stmts / 96,71% branch / 99,46% funcs / 99,39% lines** (gate `coverageThreshold` 80% ✅, o maior dos 3 serviços). Sem `@wip`.
+  - Achados registrados durante a escrita dos testes (não corrigidos, para não violar AC-9 — comportamento pré-existente preservado): bug em `applications/dto/update-reserva.dto.ts` (`equipment.self_equipment` exigido pelo yup mesmo com `equipment` ausente e marcado `.optional()` — PATCH parcial de reserva sem `equipment` falha com 400); duas branches defensivas inalcançáveis em `create-day.usecase.ts` (guardas cujas pré-condições já são garantidas antes); uma branch morta em `create/update-scheduling.controller.ts` (`const [hours = 0] = ...split(':')` nunca cai no default); uma branch defensiva inalcançável em `src/shared/date-time.ts`'s `getLocalTimeMinutes` (fallback do `Intl.DateTimeFormat` que nunca omite a parte).
+- [ ] **`/speckit-component-tests`** — N/A (task backend-only, sem alteração de UI/contrato; frontend sem Cypress) — a confirmar igual às fases 1/2
+- [x] **`/speckit-validate`** — **aprovação em bloco a pedido explícito do usuário** ("approve all
+  without showing me and approve all repositories changes"), **não** a revisão interativa
+  arquivo-por-arquivo padrão do comando. Diligência aplicada mesmo assim: `git status`/`git diff
+  --cached --name-only` revisados em busca de segredos/arquivos indevidos (nenhum encontrado),
+  `tsc --noEmit` limpo, `eslint .` 0 erros, suíte completa reexecutada (148 suítes / 812 testes
+  verdes). 380 arquivos staged (`git add -A`: 231 novos, 109 modificados, 36 removidos, 4
+  renomeados), sem commit.
 
 ### Encerramento
 
-- [x] Nenhum arquivo em `**/domain/**` importa de `**/infra/**` — **usuarios** (lint) · pagamentos ⬜ · agendamentos ⬜
-- [x] Nenhum arquivo em `**/applications/**` importa de `**/infra/**` — **usuarios** · demais ⬜
-- [x] Todos os adapters `implements` um `domain/ports/output/*` — **usuarios**
-- [x] Nenhuma regra de negócio em `infra/adapters/*` — **usuarios**
-- [x] `src/config/` e `src/main.ts` padronizados — **usuarios**
-- [ ] `beach-center-server` sobe os serviços com hot-reload (`/run-server`) — **pendente**
+- [x] Nenhum arquivo em `**/domain/**` importa de `**/infra/**` — **usuarios · pagamentos · agendamentos** (lint, todos os 3 serviços)
+- [x] Nenhum arquivo em `**/applications/**` importa de `**/infra/**` — **usuarios · pagamentos · agendamentos**
+- [x] Todos os adapters `implements` um `domain/ports/output/*` — **usuarios · pagamentos · agendamentos**
+- [x] Nenhuma regra de negócio em `infra/adapters/*` — **usuarios · pagamentos · agendamentos**
+- [x] `src/config/` e `src/main.ts` padronizados — **usuarios · pagamentos · agendamentos**
+- [ ] `beach-center-server` sobe os 3 serviços com hot-reload (`/run-server`) — **pendente** (usuarios/pagamentos/agendamentos)
 
 ### `/speckit-complete` — Fase 1 (usuarios)
 
@@ -352,6 +381,21 @@ Regras que o `/speckit-implement` deve cumprir:
 - **Given** o novo `src/main.ts` e scripts
 - **When** `/run-server` (ou `docker compose up`) sobe os 3 serviços
 - **Then** cada serviço inicia, conecta no MongoDB e recarrega ao salvar um arquivo `.ts` (volume montado, sem rebuild)
+
+## `/speckit-test` — cenários exploratórios (os 3 serviços)
+
+- [x] `tasks/001-backend-conformidade-hexagonal/exploratory-tests.md` — roteiro de QA manual
+  unificado, 3 seções (Fase 1 usuarios, Fase 2 pagamentos, Fase 3 agendamentos), cada uma com
+  Escopo/Endpoints, A. Caminhos felizes, B. Fluxos de exceção, C. Edge cases, D. Conformidade
+  arquitetural, E. Checklist de regressão, e Rastreabilidade AC→cenário própria. Todos os AC-1 a
+  AC-16 rastreados a pelo menos um cenário em cada fase aplicável (AC-6/AC-8 só em agendamentos).
+  - Achados de comportamento pré-existente documentados nos cenários (não corrigidos, AC-9):
+    `pagamentos` — reembolso não valida se a reserva foi paga (EC-03/EC-04), webhook sem
+    verificação de assinatura e sem token configurado fica totalmente aberto (X-16), refund
+    sempre mockado independente de `PAYMENT_PROVIDER`; `agendamentos` — `GET /quadras/:id`
+    inexistente retorna 200/`data:null` em vez de 404 (X-02), mensagem `"Unauthorized"` em
+    inglês nas rotas de internal-api-key (X-41/X-49), bug do `equipment.self_equipment` no PATCH
+    parcial de reserva (EC-13, já achado em `/speckit-unit-tests`).
 
 ## Riscos e observações
 
