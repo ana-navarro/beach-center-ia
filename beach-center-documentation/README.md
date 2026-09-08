@@ -17,7 +17,7 @@ beach-center-documentation/
 
 | Serviço | Rotas documentadas |
 |---|---|
-| `beach-center-bff-agendamentos` | `agendamento`, `dia`, `evento-agendado`, `link-reserva-publica`, `quadra`, `reserva`, `unidade` |
+| `beach-center-bff-agendamentos` | `agendamento`, `aula-bloqueio`, `dia`, `evento-agendado`, `link-reserva-publica`, `mensalista`, `mensalista-plano`, `quadra`, `reserva`, `unidade` |
 | `beach-center-bff-aulas` | `aula`, `aluno` |
 | `beach-center-bff-pagamentos` | `checkout`, `comprovante-pagamento`, `forma-pagamento`, `reembolso`, `webhook-getnet` |
 | `beach-center-bff-usuarios` | `auth`, `usuario` |

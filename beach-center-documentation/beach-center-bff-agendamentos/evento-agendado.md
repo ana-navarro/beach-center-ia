@@ -2,9 +2,17 @@
 
 ## Visão geral
 
-O recurso `evento-agendado` representa exceções recorrentes na grade de horários de uma quadra/unidade — aulas fixas, mensalistas ou qualquer bloqueio semanal (`event_type`: `AULA_BEACH_TENIS`, `MENSALISTA`, `AULA_VOLEI`, `OUTRO`) que ocupam um dia da semana e uma janela de horário específicos. É exposto pelo serviço `beach-center-bff-agendamentos`, sob o path `/api/v1/eventos-agendados`.
+O recurso `evento-agendado` representa exceções recorrentes na grade de horários de uma quadra/unidade — bloqueios semanais que ocupam um dia da semana e uma janela de horário específicos. É exposto pelo serviço `beach-center-bff-agendamentos`, sob o path `/api/v1/eventos-agendados`.
+
+> **Mudança da task 004 — `eventos_agendados` reduzido a `OUTRO`.** `POST` e `PATCH` agora **só aceitam `event_type: "OUTRO"`**. Os antigos `MENSALISTA` e `AULA_BEACH_TENIS`/`AULA_VOLEI` foram migrados para recursos dedicados:
+> - **Mensalistas** → [`mensalista`](./mensalista.md) + [`mensalista-plano`](./mensalista-plano.md) (`/api/v1/mensalistas` e `/api/v1/mensalistas/:mensalista_id/planos`).
+> - **Aulas** → o serviço `beach-center-bff-aulas` grava o bloqueio via rota interna [`aula-bloqueio`](./aula-bloqueio.md) (`/api/v1/aula-bloqueios`).
+>
+> O `GET /eventos-agendados` (listagem/consulta) **continua aceitando os 4 valores** de `event_type` no filtro, para consultar registros legados e migrados. Os registros migrados não são apagados pelos scripts de migração (`npm run migrate:mensalista` / `npm run migrate:aula-bloqueio`); a limpeza dos `eventos_agendados` migrados é um passo manual pós-validação.
 
 Este é o recurso com a orquestração mais crítica do serviço: criar, atualizar ou remover um evento com `status: "CONFIRMED"` **bloqueia ou libera automaticamente** os agendamentos (`scheduling`) futuros da mesma quadra/unidade que caiam no mesmo dia da semana e se sobreponham ao horário do evento, marcando `available: false`/`true` nesses agendamentos. Essa orquestração vive em `EventSchedulingImpactService` (`domain/usecases/shared/event-scheduling-impact.service.ts`), consumida pelos usecases de create/update/delete.
+
+Desde a task 004, a detecção de conflito (`EventConflictService`) considera **três fontes** de bloqueio recorrente `CONFIRMED`: `eventos_agendados` (`OUTRO`), `mensalista_planos` e `aula_bloqueios`. Um `OUTRO` só é criado/atualizado se não conflitar com nenhuma das três.
 
 ## Autenticação/autorização
 
@@ -16,9 +24,10 @@ Todos os 5 endpoints exigem `Authorization: Bearer <idToken>` válido **e** que 
 
 Cria um novo evento agendado. Aciona `CreateEventsScheduledUsecase`:
 
+0. **Rejeita `event_type !== "OUTRO"`** com `InvalidInputError` (400) — mensagem apontando para `/mensalistas` ou o serviço de aulas.
 1. Valida que `court` e `unit` existem e que a quadra pertence à unidade informada (`SchedulingReferencesValidator`).
 2. Arredonda `start_time`/`end_time` via `formatRoundedTime` — **`start_time` é truncado** (nunca arredonda para cima, mesmo com minutos > 0) e **`end_time` arredonda para cima** quando os minutos são > 0 (ex.: `"20:30"` vira `"21:00"`; `"18:30"` como início vira `"18:00"`).
-3. Verifica conflito com outro evento `CONFIRMED` já existente na mesma quadra/unidade/dia da semana/horário sobreposto (`EventConflictService.hasConflict`). Se houver, lança `EventConflictError`.
+3. Verifica conflito com qualquer bloqueador recorrente `CONFIRMED` (evento `OUTRO`, `mensalista_plano` **ou** `aula_bloqueio`) na mesma quadra/unidade/dia da semana/horário sobreposto (`EventConflictService.hasConflict`). Se houver, lança `EventConflictError`.
 4. Persiste o evento.
 5. Se `status` (default `"CONFIRMED"` quando omitido) for `"CONFIRMED"`, chama `applyEventToSchedulings`: busca todos os agendamentos da mesma quadra/unidade a partir de "hoje" (`getTodayStart()`), filtra os que caem no mesmo dia da semana (normalizado — acento/caixa insensível) e cuja janela de horário se sobrepõe à do evento, e marca `available: false` nesses agendamentos via `ISetSchedulingsAvailabilityPort`. Eventos `CANCELLED` não têm nenhum efeito colateral sobre agendamentos.
 
@@ -26,7 +35,7 @@ Cria um novo evento agendado. Aciona `CreateEventsScheduledUsecase`:
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `event_type` | string | Sim | Um de `AULA_BEACH_TENIS`, `MENSALISTA`, `AULA_VOLEI`, `OUTRO` |
+| `event_type` | string | Sim | **Apenas `OUTRO`** (task 004). Outros valores → 400 |
 | `day_of_week` | string | Sim | Nome do dia da semana em texto livre (normalizado internamente — acento/caixa/espaços ignorados) |
 | `start_time` | string | Sim | Horário de início, formato `HH:mm` |
 | `end_time` | string | Sim | Horário de fim, formato `HH:mm`; deve ser maior que `start_time` |
@@ -43,7 +52,7 @@ Cria um novo evento agendado. Aciona `CreateEventsScheduledUsecase`:
   "message": "Evento agendado criado com sucesso",
   "data": {
     "id": "665f1c2e4b3a2d1e9f0a1b2c",
-    "event_type": "MENSALISTA",
+    "event_type": "OUTRO",
     "day_of_week": "segunda-feira",
     "start_time": "18:00",
     "end_time": "20:00",
@@ -59,9 +68,10 @@ Cria um novo evento agendado. Aciona `CreateEventsScheduledUsecase`:
 
 | Código HTTP | Causa |
 |---|---|
-| 400 | `Dados inválidos` — corpo não passa na validação yup (`event_type`/`status` fora do enum, `court`/`unit` não são ObjectId de 24 hex, `end_time <= start_time`, campos obrigatórios ausentes) |
+| 400 | `event_type migrado (task 004): MENSALISTA → /mensalistas; AULA_* → serviço de aulas. Só OUTRO é aceito aqui.` — `event_type` diferente de `OUTRO` |
+| 400 | `Dados inválidos` — corpo não passa na validação yup (`event_type`/`status` fora do enum — o DTO de create/update só aceita `OUTRO` —, `court`/`unit` não são ObjectId de 24 hex, `end_time <= start_time`, campos obrigatórios ausentes) |
 | 400 | `Quadra nao pertence a unidade informada` |
-| 400 | `Conflito de excecao existente na mesma quadra, unidade e horario.` — **atenção**: apesar de semanticamente ser um conflito, a `EventConflictError` é mapeada para **400**, não 409; comportamento pré-existente preservado deliberadamente |
+| 400 | `Conflito de excecao existente na mesma quadra, unidade e horario.` — conflito com um evento `OUTRO`, `mensalista_plano` ou `aula_bloqueio` `CONFIRMED`. **Atenção**: a `EventConflictError` é mapeada para **400**, não 409; comportamento pré-existente preservado deliberadamente |
 | 401 | `Token nao fornecido` / `Token invalido ou expirado` |
 | 403 | `Acesso negado` — usuário autenticado não é ADMIN |
 | 404 | `Quadra nao encontrada` / `Unidade nao encontrada` |
@@ -73,7 +83,7 @@ curl -X POST http://localhost:5000/api/v1/eventos-agendados \
   -H "Authorization: Bearer <idToken>" \
   -H "Content-Type: application/json" \
   -d '{
-        "event_type": "MENSALISTA",
+        "event_type": "OUTRO",
         "day_of_week": "segunda-feira",
         "start_time": "18:00",
         "end_time": "20:00",
@@ -192,6 +202,7 @@ curl "http://localhost:5000/api/v1/eventos-agendados?event_type=MENSALISTA&statu
 
 Atualiza um evento agendado existente. Aciona `UpdateEventsScheduledUsecase`, que **substitui integralmente** os campos do evento (todos obrigatórios no corpo, exceto `price`) e re-executa a orquestração de bloqueio:
 
+0. **Rejeita `event_type !== "OUTRO"`** com `InvalidInputError` (400). Um `evento_agendado` legado com `event_type` `MENSALISTA`/`AULA_*` **não pode mais ser atualizado por esta rota** — só lido/listado.
 1. Busca o evento existente; se não existir, responde 404 sem validar mais nada.
 2. Valida `court`/`unit` (mesmas regras do create).
 3. Arredonda `start_time`/`end_time` (mesma lógica do create).
@@ -211,7 +222,7 @@ Atualiza um evento agendado existente. Aciona `UpdateEventsScheduledUsecase`, qu
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `event_type` | string | Sim | Um de `AULA_BEACH_TENIS`, `MENSALISTA`, `AULA_VOLEI`, `OUTRO` |
+| `event_type` | string | Sim | **Apenas `OUTRO`** (task 004) |
 | `day_of_week` | string | Sim | Dia da semana |
 | `start_time` | string | Sim | Horário de início `HH:mm` |
 | `end_time` | string | Sim | Horário de fim `HH:mm`, maior que `start_time` |
@@ -228,7 +239,7 @@ Atualiza um evento agendado existente. Aciona `UpdateEventsScheduledUsecase`, qu
   "message": "Evento agendado atualizado com sucesso",
   "data": {
     "id": "665f1c2e4b3a2d1e9f0a1b2c",
-    "event_type": "MENSALISTA",
+    "event_type": "OUTRO",
     "day_of_week": "segunda-feira",
     "start_time": "19:00",
     "end_time": "21:00",
@@ -238,7 +249,7 @@ Atualiza um evento agendado existente. Aciona `UpdateEventsScheduledUsecase`, qu
     "price": 150
   },
   "list": [
-    { "id": "665f1c2e4b3a2d1e9f0a1b2c", "event_type": "MENSALISTA", "...": "..." }
+    { "id": "665f1c2e4b3a2d1e9f0a1b2c", "event_type": "OUTRO", "...": "..." }
   ]
 }
 ```
@@ -247,9 +258,10 @@ Atualiza um evento agendado existente. Aciona `UpdateEventsScheduledUsecase`, qu
 
 | Código HTTP | Causa |
 |---|---|
+| 400 | `event_type migrado (task 004): …` — `event_type` diferente de `OUTRO` |
 | 400 | `Dados inválidos` — corpo não passa na validação yup |
 | 400 | `Quadra nao pertence a unidade informada` |
-| 400 | `Conflito de excecao existente na mesma quadra, unidade e horario.` (não conflita com o próprio evento) |
+| 400 | `Conflito de excecao existente na mesma quadra, unidade e horario.` — conflito com evento/`mensalista_plano`/`aula_bloqueio` `CONFIRMED` (não conflita com o próprio evento) |
 | 401 | `Token nao fornecido` / `Token invalido ou expirado` |
 | 403 | `Acesso negado` |
 | 404 | `Evento agendado nao encontrado` — evento inexistente, ou `Quadra nao encontrada` / `Unidade nao encontrada` |
@@ -261,7 +273,7 @@ curl -X PATCH http://localhost:5000/api/v1/eventos-agendados/665f1c2e4b3a2d1e9f0
   -H "Authorization: Bearer <idToken>" \
   -H "Content-Type: application/json" \
   -d '{
-        "event_type": "MENSALISTA",
+        "event_type": "OUTRO",
         "day_of_week": "segunda-feira",
         "start_time": "19:00",
         "end_time": "21:00",
@@ -321,7 +333,9 @@ curl -X PATCH http://localhost:5000/api/v1/eventos-agendados/665f1c2e4b3a2d1e9f0
 - Rota: `src/applications/routes/events_scheduled.route.ts`
 - Controllers: `src/applications/controllers/events_scheduled/create/create-events-scheduled.controller.ts`, `.../read/read-events-scheduled.controller.ts`, `.../list/list-events-scheduled.controller.ts`, `.../update/update-events-scheduled.controller.ts`, `.../delete/delete-events-scheduled.controller.ts`
 - Usecases: `src/domain/usecases/events_scheduled/create/create-events-scheduled.usecase.ts`, `.../read/read-events-scheduled.usecase.ts`, `.../list/list-events-scheduled.usecase.ts`, `.../update/update-events-scheduled.usecase.ts`, `.../delete/delete-events-scheduled.usecase.ts`
-- Serviços de domínio compartilhados: `src/domain/usecases/shared/event-conflict.service.ts` (detecção de conflito evento×evento), `src/domain/usecases/shared/event-scheduling-impact.service.ts` (bloqueio/liberação de agendamentos), `src/domain/usecases/shared/scheduling-references.validator.ts` (validação de quadra/unidade)
+- Serviços de domínio compartilhados: `src/domain/usecases/shared/event-conflict.service.ts` (detecção de conflito contra as 3 fontes recorrentes), `src/domain/usecases/shared/event-scheduling-impact.service.ts` (bloqueio/liberação de agendamentos), `src/domain/usecases/shared/scheduling-references.validator.ts` (validação de quadra/unidade)
+- Ports de kernel (task 004): `src/domain/ports/output/mensalista-plano-shared.port.ts`, `src/domain/ports/output/aula-bloqueio-shared.port.ts`
+- Migração: `src/scripts/migrate-mensalista-from-events.ts`, `src/scripts/migrate-aula-bloqueio-from-events.ts` (`npm run migrate:mensalista` / `migrate:aula-bloqueio`)
 - Erro de domínio específico: `src/domain/usecases/events_scheduled/shared/event-conflict.error.ts`
 - DTOs: `src/applications/dto/events-scheduled.dto.ts`
 - Modelo: `src/domain/models/events-scheduled.model.ts`

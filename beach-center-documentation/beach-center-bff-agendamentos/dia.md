@@ -337,8 +337,12 @@ específico. Rota pública, apesar do verbo `POST` — o corpo é usado apenas p
    existem (dedup por `start_time + court + unit` — chamadas repetidas ao mesmo dia/quadra/unidade
    são **idempotentes**, não duplicam agendamentos nem `scheduling_ids`).
 5. Cria o dia (se não existia) ou anexa os novos `scheduling_ids`.
-6. Para cada agendamento com `available: true`, verifica conflitos com eventos `CONFIRMED`
-   (`EventConflictService.getConflicts`) e monta a lista `exception_conflicts`.
+6. Para cada agendamento com `available: true`, verifica conflitos com bloqueadores recorrentes
+   `CONFIRMED` (`EventConflictService.getConflicts`) e monta a lista `exception_conflicts`. Desde
+   a task 004 o `EventConflictService` mescla **três** fontes: `eventos_agendados` (`OUTRO`),
+   `mensalista_planos` e `aula_bloqueios`. Cada item em `exceptions[]` traz o campo **`source`**
+   (`"EVENT"` | `"MENSALISTA"` | `"AULA"`) indicando a origem do bloqueio; o restante do shape é
+   inalterado.
 7. Libera agendamentos elegíveis, bloqueia os que têm conflito de evento e os que pertencem a um
    dia (ou recorte) fechado.
 
@@ -365,7 +369,7 @@ específico. Rota pública, apesar do verbo `POST` — o corpo é usado apenas p
   "exception_conflicts": [
     {
       "scheduling": { "id": "665f...", "start_time": "..." },
-      "exceptions": [{ "id": "665f...", "event_type": "MENSALISTA", "day_of_week": "quinta-feira", "start_time": "18:00", "end_time": "20:00", "court": "665f...", "unit": "665f...", "status": "CONFIRMED" }]
+      "exceptions": [{ "id": "665f...", "event_type": "MENSALISTA", "day_of_week": "quinta-feira", "start_time": "18:00", "end_time": "20:00", "court": "665f...", "unit": "665f...", "status": "CONFIRMED", "source": "MENSALISTA" }]
     }
   ]
 }

@@ -18,11 +18,25 @@ O modelo de domínio (`IAula`):
 | `hora_inicio` | string (ISO date) | Início da aula |
 | `hora_fim` | string (ISO date) | Fim da aula — **não** há validação de que `hora_fim > hora_inicio` |
 | `professor` | string (ObjectId) | Referencia um usuário de `beach-center-bff-usuarios` com `user_type = "PROFESSOR"` |
-| `quadra` | string | Referência livre ao id de uma quadra em `agendamentos` — **sem** validação cruzada nem bloqueio de horário nesta versão (fora de escopo) |
+| `quadra` | string | ObjectId de uma quadra em `agendamentos`. **Desde a task 004** a aula gera um **bloqueio recorrente de quadra** em `agendamentos` (ver abaixo) |
 | `capacidade_maxima` | number | Inteiro ≥ 1 — limite de alunos matriculados (não deletados) |
 
 O campo interno `deleted` (soft delete manual) não é exposto nas respostas. A gestão de alunos da
 turma fica no recurso aninhado [`aluno`](./aluno.md) (`/aulas/:aula_id/alunos`).
+
+### Integração com `agendamentos` (task 004 — bloqueio recorrente de quadra)
+
+Criar/atualizar/deletar uma aula chama, via HTTP interno, a rota
+[`/api/v1/aula-bloqueios`](../beach-center-bff-agendamentos/aula-bloqueio.md) de
+`beach-center-bff-agendamentos` (header `x-api-key`), que mantém um `aula_bloqueio` CONFIRMED
+bloqueando os `scheduling`s da quadra nos dias/horário da aula.
+
+- `hora_inicio`/`hora_fim` (`Date`) são convertidos para `"HH:MM"` no fuso `America/Sao_Paulo`
+  (`horaToHHMM`) antes de enviar. ⚠️ O contrato de fuso do `hora_inicio` enviado pelo cliente
+  ainda precisa de alinhamento com o time (ver `tasks/004-.../exploratory-tests.md`, G-1).
+- Variáveis de ambiente necessárias no serviço `aulas`: `AGENDAMENTOS_API_URL`,
+  `AGENDAMENTOS_INTERNAL_API_KEY`. **Opcionais** — se ausentes, as operações de aula que precisam
+  do bloqueio respondem `500` com mensagem clara.
 
 ## Autenticação/autorização
 
@@ -55,7 +69,11 @@ turma fica no recurso aninhado [`aluno`](./aluno.md) (`/aulas/:aula_id/alunos`).
 ### POST /api/v1/aulas
 
 Cria uma nova aula. Aciona `CreateAulaUsecase`: valida que `professor` existe em `usuarios` **e**
-que tem `user_type = "PROFESSOR"` antes de persistir.
+que tem `user_type = "PROFESSOR"`, persiste a aula e então cria o **bloqueio de quadra** em
+`agendamentos` (`aula_id`, `dias`, `start_time`/`end_time` em `"HH:MM"`, `court`, `modalidade`).
+Se o bloqueio falhar (conflito de quadra `409`, rede, ou integração não configurada), o usecase
+faz **rollback hard-delete** da aula recém-criada (best-effort, com log) e **propaga o erro** —
+nenhuma aula fica pendurada sem bloqueio.
 
 **Corpo da requisição** (`createAulaDTO`, `stripUnknown: true`)
 
@@ -97,7 +115,8 @@ que tem `user_type = "PROFESSOR"` antes de persistir.
 | 401 | Token não fornecido/inválido |
 | 403 | Usuário autenticado não é `ADMIN` — **"Acesso negado"** |
 | 404 | `professor` não encontrado em `usuarios` — **"Professor nao encontrado"** |
-| 500 | Erro inesperado de persistência — **"Erro interno no servidor"** |
+| 409 | Quadra/dia/horário já ocupado por outro bloqueador recorrente em `agendamentos` — **"Conflito de horário da aula com outro agendamento recorrente na quadra."** (a aula sofre rollback) |
+| 500 | Erro inesperado de persistência, **ou** integração com `agendamentos` não configurada/indisponível (a aula sofre rollback) |
 
 **Exemplo de chamada**
 ```bash
@@ -190,6 +209,12 @@ Atualiza uma aula (parcial). Aciona `UpdateAulaUsecase`: valida o `id`, confirma
 e, **se** `professor` estiver no corpo, revalida que o novo professor existe e é `PROFESSOR`. O
 controller descarta campos ausentes/`undefined` antes de repassar ao usecase.
 
+**Task 004** — se algum campo **estrutural** mudou (`dias`, `quadra`, `hora_inicio`, `hora_fim`,
+`modalidade` — comparação de `dias` ignora a ordem), o usecase **re-sincroniza o bloqueio** em
+`agendamentos`: `cancel` de todos os bloqueios da aula (`PATCH /aula-bloqueios/by-aula/:aula_id/delete`)
+seguido de `create` do novo estado. Mudanças só em `classe`/`capacidade_maxima`/`professor` **não**
+tocam o bloqueio.
+
 **Parâmetros de path**
 
 | Campo | Tipo | Obrigatório | Descrição |
@@ -231,7 +256,8 @@ alunos já matriculados **é permitido** (não há checagem retroativa).
 | 403 | `requireOwnerOrAdmin`: não é `ADMIN` nem o professor dono da aula — **"Acesso negado"** |
 | 404 | Aula não encontrada — **"Aula nao encontrada"** |
 | 404 | Novo `professor` não encontrado — **"Professor nao encontrado"** |
-| 500 | Erro inesperado de persistência |
+| 409 | Mudança estrutural cria conflito de quadra em `agendamentos` (a aula já foi atualizada; o bloqueio pode ter ficado cancelado — reexecutar após resolver o conflito) |
+| 500 | Erro inesperado de persistência, ou integração com `agendamentos` indisponível na re-sincronização do bloqueio |
 
 **Exemplo de chamada**
 ```bash
@@ -245,7 +271,11 @@ curl -X PUT "http://localhost:5002/api/v1/aulas/507f1f77bcf86cd799439011" \
 
 ### DELETE /api/v1/aulas/:id
 
-Remove (soft delete) uma aula. Aciona `DeleteAulaUsecase`: valida o `id` e marca `deleted: true`.
+Remove (soft delete) uma aula. Aciona `DeleteAulaUsecase`: valida o `id`, marca `deleted: true` e
+então **cancela o bloqueio de quadra** da aula em `agendamentos`
+(`PATCH /aula-bloqueios/by-aula/:aula_id/delete`), liberando os `scheduling`s. O cancelamento é
+**bloqueante**: se `agendamentos` estiver indisponível, o `DELETE` responde `500` (a aula já foi
+soft-deletada) — reexecutar o `DELETE` depois cancela o bloqueio pendente.
 A aula deixa de aparecer em `GET /aulas` e `GET /aulas/:id`.
 
 **Parâmetros de path**
@@ -273,7 +303,7 @@ A aula deixa de aparecer em `GET /aulas` e `GET /aulas/:id`.
 | 401 | Token não fornecido/inválido |
 | 403 | Usuário não é `ADMIN` (mesmo sendo o professor dono) — **"Acesso negado"** |
 | 404 | Aula inexistente ou já deletada — **"Aula nao encontrada"** |
-| 500 | Erro inesperado de persistência |
+| 500 | Erro inesperado de persistência, ou falha ao cancelar o bloqueio em `agendamentos` (aula já soft-deletada) |
 
 **Exemplo de chamada**
 ```bash
@@ -289,9 +319,10 @@ curl -X DELETE "http://localhost:5002/api/v1/aulas/507f1f77bcf86cd799439011" \
 - Usecases: `services/beach-center-bff-aulas/src/domain/usecases/aula/{create,read,update,delete,list}/*.usecase.ts`
 - DTO: `services/beach-center-bff-aulas/src/applications/dto/aula.dto.ts`
 - Model: `services/beach-center-bff-aulas/src/domain/models/aula.model.ts`
-- Ports: `services/beach-center-bff-aulas/src/domain/ports/input/aula.input-port.ts`, `.../ports/output/aula-persistence.port.ts`, `.../ports/output/auth.port.ts` (`IFindUserByIdPort`)
-- Adapters: `services/beach-center-bff-aulas/src/infra/adapters/aula/{create,read,update,delete,list}/*.adapter.ts`, `.../adapters/user/find-user-by-id.adapter.ts`
+- Ports: `services/beach-center-bff-aulas/src/domain/ports/input/aula.input-port.ts`, `.../ports/output/aula-persistence.port.ts` (`IHardDeleteAulaPort` — rollback), `.../ports/output/auth.port.ts` (`IFindUserByIdPort`), `.../ports/output/aula-bloqueio-client.port.ts` (task 004)
+- Adapters: `services/beach-center-bff-aulas/src/infra/adapters/aula/{create,read,update,delete,list,hard-delete}/*.adapter.ts`, `.../adapters/user/find-user-by-id.adapter.ts`, `.../adapters/aula-bloqueio/{create,cancel}/*-client.adapter.ts` (axios → `agendamentos`)
 - Schema: `services/beach-center-bff-aulas/src/infra/schemas/aula.schema.ts`
+- Integração (task 004): `services/beach-center-bff-aulas/src/domain/usecases/aula/shared/hora-to-hhmm.ts`, `src/config/env.ts` (`AGENDAMENTOS_API_URL?`, `AGENDAMENTOS_INTERNAL_API_KEY?`)
 - Middlewares: `services/beach-center-bff-aulas/src/applications/middlewares/auth.middleware.ts` (`authMiddleware`, `requireRole`, `requireOwnerOrAdmin`)
 - Erros de domínio: `services/beach-center-bff-aulas/src/domain/errors.ts`
 - Tradução HTTP: `services/beach-center-bff-aulas/src/applications/controllers/shared/handle-http-error.ts`

@@ -78,7 +78,7 @@ Cria uma reserva para 1 a 3 horários (`scheduling_id`). Aciona `CreateReserveUs
 | 400 | `"E permitido selecionar no maximo 3 horarios"` / `"Nao e permitido repetir horarios na mesma reserva"` (redundante com o DTO, mas também validado no usecase) |
 | 400 | `"Nao e permitido criar reserva para datas que ja passaram"` |
 | 404 | `{"message": "Agendamento não encontrado", "id": [<scheduling_id enviados>]}` — shape especial, **não** segue o padrão `{message}` de `handle-http-error.ts` — ocorre quando algum `scheduling_id` não existe |
-| 409 | `"Um ou mais horarios selecionados possuem excecao de agendamento"` — algum horário coincide com evento agendado `CONFIRMED` |
+| 409 | `"Um ou mais horarios selecionados possuem excecao de agendamento"` — algum horário coincide com um bloqueador recorrente `CONFIRMED` (evento `OUTRO`, `mensalista_plano` ou `aula_bloqueio` — task 004) |
 | 409 | `"Um ou mais horarios selecionados nao estao disponiveis"` — algum horário já está `available: false` (reservado) |
 | 401 | Sem token (`"Token nao fornecido"`) |
 

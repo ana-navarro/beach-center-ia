@@ -35,11 +35,12 @@ Cria um novo agendamento (slot de horário). Pública — usada tanto pelo fluxo
 2. `SchedulingWindowValidator` — valida que a data não é passada, que `date`/`start_time`/
    `end_time` pertencem ao mesmo dia, que `end_time > start_time`, que o horário está dentro do
    funcionamento da unidade e fora do intervalo de almoço (ver regras especiais abaixo).
-3. `EventConflictService.hasConflict` — verifica se existe um evento agendado `CONFIRMED` que
-   conflita com o dia da semana e a janela de horário nessa quadra/unidade.
+3. `EventConflictService.hasConflict` — verifica se existe um **bloqueador recorrente `CONFIRMED`**
+   conflitando com o dia da semana e a janela de horário nessa quadra/unidade. Desde a task 004
+   são **3 fontes**: `eventos_agendados` (`OUTRO`), `mensalista_planos` e `aula_bloqueios`.
 
-O campo `available` salvo é sempre `false` se houver conflito de evento **ou** se a data for
-passada; caso contrário, usa o valor enviado no body (default `false` se omitido).
+O campo `available` salvo é sempre `false` se houver conflito com qualquer uma das 3 fontes **ou**
+se a data for passada; caso contrário, usa o valor enviado no body (default `false` se omitido).
 
 **Regra especial de horário de funcionamento** (`SchedulingWindowValidator`):
 - Unidade com `_id = 6a440a931094fad2f585011b` (`unitOneId`): funcionamento **18:00–22:00**, **sem** intervalo de almoço.
