@@ -3,6 +3,8 @@
 ## Visão geral
 Recurso responsável pelo ciclo de vida de autenticação e pelo autoatendimento do usuário autenticado (perfil próprio, avatar, e-mail e senha) no serviço `beach-center-bff-usuarios`. As rotas combinam o Firebase Authentication (identidade/credenciais) com a persistência de usuários no MongoDB. Todas as rotas são montadas em `/auth` pelo router principal (`src/applications/routes/routes.ts`) e o serviço expõe tudo sob o prefixo global `/api/v1` (definido em `src/main.ts`).
 
+> **Firebase Auth Emulator (desenvolvimento).** Quando a variável de ambiente `FIREBASE_AUTH_EMULATOR_HOST` está definida (ex.: no `docker-compose.dev.yml` do `beach-center-server`), o serviço **não** exige service account: `ensureFirebaseApp` inicializa o Admin SDK só com o `projectId`, e as chamadas REST de `POST /auth/login` e `POST /auth/forgot-password` são direcionadas para `http://<host>/identitytoolkit.googleapis.com/v1/...` em vez do Google (`src/infra/adapters/auth/identity-toolkit.ts`). **O contrato das rotas — corpo, resposta e códigos de status — é idêntico nos dois modos.** Sem a variável (produção, CI), o comportamento é o documentado abaixo, com service account e host do Google.
+
 ## Autenticação/autorização
 - `POST /auth/register`, `POST /auth/login` e `POST /auth/forgot-password` são **públicas** (sem middleware).
 - Todas as demais rotas (`/auth/me*`) exigem `authMiddleware` (`src/applications/middlewares/auth.middleware.ts`), que:
@@ -424,6 +426,11 @@ curl -X PATCH https://<host>/api/v1/auth/me/password \
 - `src/domain/usecases/auth/register-auth.usecase.ts`
 - `src/domain/usecases/auth/login-auth.usecase.ts`
 - `src/domain/usecases/auth/forgot-password-auth.usecase.ts`
+- `src/infra/adapters/auth/sign-in-with-password.adapter.ts` (REST `signInWithPassword` — login)
+- `src/infra/adapters/auth/send-password-reset-email.adapter.ts` (REST `sendOobCode` — reset de senha)
+- `src/infra/adapters/auth/identity-toolkit.ts` (`identityToolkitBaseUrl()` — host do Google vs emulador)
+- `src/config/firebase.ts` (`ensureFirebaseApp` — service account vs modo emulador)
+- `src/config/env.ts` (`FIREBASE_AUTH_EMULATOR_HOST`, opcional)
 - `src/domain/usecases/auth/update-auth-profile.usecase.ts`
 - `src/domain/usecases/auth/update-auth-email.usecase.ts`
 - `src/domain/usecases/auth/update-auth-password.usecase.ts`
