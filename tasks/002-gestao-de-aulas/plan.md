@@ -153,47 +153,47 @@ index.js                        // shim -> require('./dist/main')
 
 ### `aulas` — domínio `aula`
 
-- [ ] `src/domain/errors.ts` — copiar literal de `beach-center-bff-usuarios/src/domain/errors.ts`
-- [ ] `src/domain/models/aula.model.ts` — `IAula { id, classe, modalidade, dias: string[], hora_inicio: Date, hora_fim: Date, professor: string, quadra: string, capacidade_maxima: number }`
-- [ ] `src/domain/ports/output/aula-persistence.port.ts` — `ICreateAulaPort`, `IReadAulaPort`, `IUpdateAulaPort`, `IDeleteAulaPort`, `IListAulasPort`
-- [ ] `src/domain/ports/input/aula.input-port.ts` — um por usecase
-- [ ] `src/domain/usecases/aula/{create,read,update,delete,list}/*.usecase.ts` — `assertValidObjectId` em read/update/delete; `NotFoundError` quando adapter retorna null; `create`/`update` validam que `professor` existe e tem `user_type="PROFESSOR"` (via `IFindUserByFirestoreIdPort`/porta equivalente de busca por id) — 404/400 conforme o caso
-- [ ] `src/infra/schemas/aula.schema.ts` — Mongoose + `mongoose-delete`
-- [ ] `src/infra/adapters/aula/{create,read,update,delete,list}/*.adapter.ts` — `implements` os ports acima
-- [ ] `src/applications/dto/aula.dto.ts` — yup: `create` (todos campos obrigatórios), `update` (parcial)
-- [ ] `src/applications/controllers/aula/{create,read,update,delete,list}/*.controller.ts` — thin, `container.<usecase>.execute(...)`, `handleHttpError`
-- [ ] `src/applications/routes/aula.route.ts` — `POST/GET/PUT/DELETE /aulas`, `GET /aulas/:id`; `authMiddleware` em todas, `requireRole('ADMIN')` em delete, `requireOwnerOrAdmin` em create/update
+- [x] `src/domain/errors.ts` — `DomainError` + `InvalidInputError`/`NotFoundError`/`ConflictError`/`UnauthorizedError`/`ForbiddenError` (mesmo padrão de `usuarios`)
+- [x] `src/domain/models/aula.model.ts` — `IAula` + `ICreateAulaData` + `IUpdateAulaData`
+- [x] `src/domain/ports/output/aula-persistence.port.ts` — `ICreateAulaPort`, `IReadAulaPort`, `IUpdateAulaPort`, `IDeleteAulaPort`, `IListAulasPort`
+- [x] `src/domain/ports/input/aula.input-port.ts` — um por usecase
+- [x] `src/domain/usecases/aula/{create,read,update,delete,list}/*.usecase.ts` — `assertValidObjectId` em read/update/delete; `NotFoundError` quando adapter retorna null; `create`/`update` validam que `professor` existe e tem `user_type="PROFESSOR"` via `IFindUserByIdPort` — `NotFoundError` 404 / `InvalidInputError` 400
+- [x] `src/infra/schemas/aula.schema.ts` — Mongoose. **Desvio:** soft-delete manual (`deleted: Boolean` + filtro `{ deleted: { $ne: true } }`) em vez de `mongoose-delete` — o plugin não tem `@types` e quebraria `tsc --noEmit` sob `strict`; mesmo padrão real de `court`/`unit` em `agendamentos` (rationale documentada no topo do arquivo)
+- [x] `src/infra/adapters/aula/{create,read,update,delete,list}/*.adapter.ts` — `implements` os ports acima
+- [x] `src/applications/dto/aula.dto.ts` — yup: `createAulaDTO` (todos obrigatórios, `professor` valida ObjectId de 24 chars), `updateAulaDTO` (parcial)
+- [x] `src/applications/controllers/aula/{create,read,update,delete,list}/*.controller.ts` — thin, `container.<usecase>.execute(...)`, `handleHttpError`
+- [x] `src/applications/routes/aula.route.ts` — `POST/GET/PUT/DELETE /aulas`, `GET /aulas/:id`; `authMiddleware` em todas, `requireRole('ADMIN')` em delete. **Desvio:** `POST /aulas` usa `requireRole('ADMIN')` (não `requireOwnerOrAdmin`) — não há "dono" antes da aula existir, e AC-1/AC-2 descrevem o ADMIN criando; `PUT /aulas/:id` usa `requireOwnerOrAdmin`
 
 ### `aulas` — domínio `aluno`
 
-- [ ] `src/domain/models/aluno.model.ts` — `IAluno { id, aula_id, nome, telefone, vencimento_fatura: Date, ativo: boolean }`
-- [ ] `src/domain/ports/output/aluno-persistence.port.ts` — `ICreateAlunoPort`, `IReadAlunoPort`, `IUpdateAlunoPort`, `IDeleteAlunoPort`, `IListAlunosPort` (por `aula_id`), `ICountAlunosByAulaPort` (para validar `capacidade_maxima`)
-- [ ] `src/domain/ports/input/aluno.input-port.ts`
-- [ ] `src/domain/usecases/aluno/create/create-aluno.usecase.ts` — valida `aula` existe (via `IReadAulaPort`), valida `ICountAlunosByAulaPort < capacidade_maxima` (`ConflictError` 409 se lotado)
-- [ ] `src/domain/usecases/aluno/{read,update,delete}/*.usecase.ts` — thin + `assertValidObjectId`
-- [ ] `src/domain/usecases/aluno/list/list-alunos.usecase.ts` — **recálculo lazy**: antes de listar, atualiza em lote `ativo=false` onde `vencimento_fatura < hoje` e `ativo=true` (e o inverso, `ativo=true` onde `vencimento_fatura >= hoje` e `ativo=false`, cobrindo o caso de reativação após pagamento registrado) — mesmo padrão de `markPastSchedulingsUnavailable` em `agendamentos`, via um novo port `IRecalculateAlunosStatusPort`
-- [ ] `src/infra/schemas/aluno.schema.ts` — Mongoose + `mongoose-delete`, índice em `aula_id`
-- [ ] `src/infra/adapters/aluno/{create,read,update,delete,list}/*.adapter.ts` + `count-by-aula` + `recalculate-status` adapters
-- [ ] `src/applications/dto/aluno.dto.ts` — yup
-- [ ] `src/applications/controllers/aluno/{create,read,update,delete,list}/*.controller.ts` — thin
-- [ ] `src/applications/routes/aluno.route.ts` — `POST/GET /aulas/:aula_id/alunos`, `GET/PUT/DELETE /aulas/:aula_id/alunos/:id`; mesmos middlewares de `aula` (ownership resolvido pela `aula_id` da URL)
+- [x] `src/domain/models/aluno.model.ts` — `IAluno` + `ICreateAlunoData` + `IUpdateAlunoData` (`ativo` derivado no usecase/adapter, fora do payload de criação)
+- [x] `src/domain/ports/output/aluno-persistence.port.ts` — `ICreateAlunoPort`, `IReadAlunoPort`, `IUpdateAlunoPort`, `IDeleteAlunoPort`, `IListAlunosPort` (por `aula_id`), `ICountAlunosByAulaPort`, `IRecalculateAlunosStatusPort`
+- [x] `src/domain/ports/input/aluno.input-port.ts`
+- [x] `src/domain/usecases/aluno/create/create-aluno.usecase.ts` — valida `aula` existe (via `IReadAulaPort`), valida `count >= capacidade_maxima` → `ConflictError` 409; deriva `ativo` de `vencimento_fatura >= hoje`
+- [x] `src/domain/usecases/aluno/{read,update,delete}/*.usecase.ts` — thin + `assertValidObjectId`
+- [x] `src/domain/usecases/aluno/list/list-alunos.usecase.ts` — **recálculo lazy**: `recalculateAlunosStatusPort.execute(aulaId)` ANTES de listar (dois `updateMany` escopados por `aula_id`: `vencimento < hoje & ativo` → `false`, `vencimento >= hoje & !ativo` → `true`) — mesmo padrão de `markPastSchedulingsUnavailable`
+- [x] `src/infra/schemas/aluno.schema.ts` — Mongoose, soft-delete manual (mesmo desvio de `aula.schema.ts`), `index({ aula_id: 1 })`
+- [x] `src/infra/adapters/aluno/{create,read,update,delete,list}/*.adapter.ts` + `count-by-aula` + `recalculate-status` adapters
+- [x] `src/applications/dto/aluno.dto.ts` — yup (`aula_id` vem da URL, nunca do body)
+- [x] `src/applications/controllers/aluno/{create,read,update,delete,list}/*.controller.ts` — thin
+- [x] `src/applications/routes/aluno.route.ts` — `POST/GET /aulas/:aula_id/alunos`, `GET/PUT/DELETE /aulas/:aula_id/alunos/:id`; `Router({ mergeParams: true })`, `authMiddleware` + `requireOwnerOrAdmin` em todas (ownership resolvido pela `aula_id` da URL)
 
 ### `aulas` — auth e integração final
 
-- [ ] `src/domain/ports/output/auth-provider.port.ts` — `IVerifyIdTokenPort`, `IFindUserByFirestoreIdPort`
-- [ ] `src/infra/adapters/auth/verify-id-token.adapter.ts`, `find-user-by-firestore-id.adapter.ts`
-- [ ] `src/domain/usecases/auth/authenticate-request.usecase.ts` — mesmas mensagens de erro do padrão já usado em `agendamentos` (`'Token nao fornecido'`, `'Usuario nao encontrado no sistema'`, `'Token invalido ou expirado'`)
-- [ ] `src/applications/middlewares/auth.middleware.ts` — `authMiddleware`, `requireRole`, **novo** `requireOwnerOrAdmin` (carrega a `aula` pelo `:id`/`:aula_id` da rota via container e compara `professor` com o usuário autenticado)
-- [ ] `src/config/container.ts` — composition root (todas as ~10 usecases de aula/aluno + auth)
-- [ ] `src/applications/routes/routes.ts` — monta `aula.route.ts` + `aluno.route.ts` sob `/api/v1`
-- [ ] ESLint sem erros e `tsc --noEmit` limpo
+- [x] `src/domain/ports/output/auth.port.ts` — `IVerifyIdTokenPort`, `IFindUserByFirestoreIdPort`, `IFindUserByIdPort`
+- [x] `src/infra/adapters/auth/firebase-verify-id-token.adapter.ts`; `src/infra/adapters/user/find-user-by-firestore-id.adapter.ts`, `find-user-by-id.adapter.ts`
+- [x] `src/domain/usecases/auth/authenticate-request.usecase.ts` — mesmas mensagens de erro do padrão de `agendamentos`
+- [x] `src/applications/middlewares/auth.middleware.ts` — `authMiddleware`, `requireRole`, **novo** `requireOwnerOrAdmin` (lê `req.params.aula_id ?? req.params.id`, carrega a aula via `container.readAula`, compara `professor` com `req.databaseUser.id`)
+- [x] `src/config/container.ts` — composition root (11 usecases: 5 aula + 5 aluno + auth)
+- [x] `src/applications/routes/routes.ts` — monta `aluno.route.ts` (`/aulas/:aula_id/alunos`) + `aula.route.ts` (`/aulas`) sob `/api/v1`
+- [x] ESLint sem erros e `tsc --noEmit` limpo
 
 ### Encerramento
 
-- [ ] Nenhum arquivo em `domain/**` importa de `infra/**`
-- [ ] Nenhum arquivo em `applications/**` importa de `infra/**`
-- [ ] Todos os adapters `implements` um `domain/ports/output/*`
-- [ ] Um adapter por verbo/ação (sem adapter multi-método)
+- [x] Nenhum arquivo em `domain/**` importa de `infra/**` (grep limpo)
+- [x] Nenhum arquivo em `applications/**` importa de `infra/**` (grep limpo)
+- [x] Todos os adapters `implements` um `domain/ports/output/*` (15/15)
+- [x] Um adapter por verbo/ação (sem adapter multi-método)
 - [ ] `beach-center-server` — pendência registrada (novo upstream/`location` nginx + entrada no
       compose para `aulas`), resolver via `/run-server` numa passada futura (fora desta task)
 
