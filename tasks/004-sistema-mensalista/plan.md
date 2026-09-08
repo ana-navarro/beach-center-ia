@@ -547,4 +547,10 @@ Fases 1–6 **implementadas** (`/speckit-implement`, 4 passadas):
 
 **`/speckit-component-tests`** — ✅ **N/A** (task 100% backend; `beach-center-app` sem mudanças e fora de escopo; Cypress+Cucumber não instalados no ecossistema — mesmo veredicto das tasks 002/003). Os fluxos E2E ficam para o roteiro exploratório manual do `/speckit-test`.
 
-Próximo: `/speckit-validate` → `/speckit-test` → `/speckit-complete` → `/speckit-documentation` (docs de `mensalista`/`mensalista-plano`/`aula-bloqueio` + `evento-agendado` só `OUTRO` + nota de ordem da migração).
+**`/speckit-validate`** — ✅ (revisão autônoma; 1 ajuste de doc-comment).
+**`/speckit-test`** — ✅ `exploratory-tests.md` (67 cenários; 21 "só manual").
+**`/speckit-complete`** — ✅ Quality Gate local verde nos 2 serviços; commit + push em `feat/task-004-sistema-mensalista` nos 4 repos:
+`agendamentos` `29bbea3` · `aulas` `069b8e3` · `beach-center-server` `a621a04` · `beach-center-ia` `d78e8aa`.
+Sem CI configurada nos repos (o gate local é o efetivo).
+
+Próximo: **`/speckit-documentation`** — docs de `mensalista`/`mensalista-plano`/`aula-bloqueio` em `beach-center-documentation/beach-center-bff-agendamentos/` + atualizar `evento-agendado.md` (só `OUTRO`) + nota de ordem da migração.
