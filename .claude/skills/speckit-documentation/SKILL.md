@@ -1,6 +1,6 @@
 ---
 name: "speckit-documentation"
-description: "Mapeia todos os endpoints do repositório e gera/atualiza a documentação em PT-BR, um arquivo por rota em beach-center-documentations/[nome-repo]/[nome-rota].md."
+description: "Mapeia todos os endpoints do repositório e gera/atualiza a documentação em PT-BR, um arquivo por rota em beach-center-documentation/[nome-repo]/[nome-rota].md."
 argument-hint: "Nome do repositório alvo ou rota específica (opcional)"
 compatibility: "Requires spec-kit project structure with .specify/ directory"
 metadata:
@@ -81,9 +81,9 @@ altera código de aplicação nem testes; só escreve arquivos `.md` de document
    `kebab-case`, no singular quando fizer sentido.
 
 5. **Gerar/atualizar a documentação** — um arquivo por rota, redigido **em português**, em:
-   `beach-center-documentations/[nome-repo]/[nome-rota].md`
+   `beach-center-documentation/[nome-repo]/[nome-rota].md`
    - `[nome-repo]` é o nome da pasta do serviço (ex.: `beach-center-bff-agendamentos`).
-   - Exemplo de caminho: `beach-center-documentations/beach-center-bff-agendamentos/agendamento.md`.
+   - Exemplo de caminho: `beach-center-documentation/beach-center-bff-agendamentos/agendamento.md`.
    - Crie os diretórios que faltarem. Se o arquivo já existir, **atualize-o** preservando notas
      manuais relevantes e removendo o que não corresponde mais ao código.
    - Estrutura de cada documento:
@@ -138,13 +138,13 @@ Check if `.specify/extensions.yml` exists in the project root.
 
 - Repositório(s) documentado(s).
 - Tabela `método | path | rota (arquivo) | usecase`.
-- Lista de arquivos criados/atualizados em `beach-center-documentations/[nome-repo]/`.
+- Lista de arquivos criados/atualizados em `beach-center-documentation/[nome-repo]/`.
 - Endpoints que não puderam ser totalmente mapeados (e por quê), se houver.
 
 ## Done When
 
 - [ ] Todos os endpoints do(s) repositório(s) alvo mapeados a partir do código atual
-- [ ] Um arquivo `.md` por rota em `beach-center-documentations/[nome-repo]/[nome-rota].md`
+- [ ] Um arquivo `.md` por rota em `beach-center-documentation/[nome-repo]/[nome-rota].md`
 - [ ] Documentação redigida em português
 - [ ] Documentos existentes atualizados (não duplicados) conforme o código
 - [ ] Nenhum código de aplicação ou teste alterado

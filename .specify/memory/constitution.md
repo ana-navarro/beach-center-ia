@@ -1,15 +1,15 @@
 <!--
 Sync Impact Report
-- Version change: 1.2.0 → 1.3.0
-- Rationale (1.2.0 → 1.3.0, MINOR): Removed documentation generation from `/speckit-complete`. Reworked `/speckit-documentation` to map endpoints and generate PT-BR documentation in `beach-center-documentations/[nome-repo]/[nome-rota].md`.
-- Modified principles:
-  - V. Workflow de Implementação Automatizada: Updated `/speckit-complete` and `/speckit-documentation` definitions.
+- Version change: 1.3.0 → 1.3.1
+- Rationale (1.3.0 → 1.3.1, PATCH): Correção do caminho da documentação de endpoints — de `beach-center-documentations/` (plural) para `beach-center-documentation/` (singular), pasta única dentro do repositório `beach-center-ia`.
+- Modified principles: none
 - Modified sections:
-  - Comandos de Desenvolvimento: Updated `/speckit-complete` (removed doc generation). Added explicit rules for `/speckit-documentation`.
+  - Comandos de Desenvolvimento: `/speckit-documentation` — caminho corrigido para `beach-center-documentation/[nome-repo]/[nome-rota].md`.
 - Added sections: none
 - Removed sections: none
 - Deferred TODOs: none
 - Prior amendment history:
+  - 1.2.0 → 1.3.0 (MINOR): Removed documentation generation from `/speckit-complete`. Reworked `/speckit-documentation` to map endpoints and generate PT-BR documentation.
   - 1.2.0 (MINOR): Added dedicated test-generation commands (`/speckit-unit-tests` and `/speckit-component-tests`) and a strict local pre-push quality gate on `/speckit-complete` enforcing 80% test coverage...
   - 1.1.1 (PATCH): Set ratification date to 2026-08-27...
   - 1.0.0 → 1.1.0 (MINOR): Added strict ESLint compliance for all generated code...
@@ -143,8 +143,8 @@ Quando o usuário acionar os comandos abaixo, o assistente MUST atuar da seguint
   - Atualiza e cria toda a documentação baseando-se no código atual do repositório.
   - MUST buscar e mapear todos os endpoints existentes na aplicação.
   - A documentação gerada MUST ser redigida em português.
-  - MUST salvar o documento de cada endpoint isoladamente, seguindo a estrutura de pastas: `beach-center-documentations/[nome-repo]/[nome-rota].md`.
-  - Exemplo de caminho de arquivo esperado: `beach-center-documentations/beach-center-bff-agendamentos/agendamento.md`.
+  - MUST salvar o documento de cada endpoint isoladamente, seguindo a estrutura de pastas: `beach-center-documentation/[nome-repo]/[nome-rota].md`.
+  - Exemplo de caminho de arquivo esperado: `beach-center-documentation/beach-center-bff-agendamentos/agendamento.md`.
 
 ### Comandos de Utilitários
 - `/update-repos`: Sugerir comandos para atualizar dependências e sincronizar branches.
@@ -163,4 +163,4 @@ Quando o usuário acionar os comandos abaixo, o assistente MUST atuar da seguint
 - Toda revisão de PR MUST verificar conformidade com esta Constituição.
 - Complexidade que viole a Arquitetura Hexagonal (Princípio II) ou a regra contra uso de BFFs (Princípio I) MUST ser explicitamente justificada ou rejeitada.
 
-**Version**: 1.3.0 | **Ratified**: 2026-08-30 | **Last Amended**: 2026-08-30
+**Version**: 1.3.1 | **Ratified**: 2026-08-30 | **Last Amended**: 2026-09-08

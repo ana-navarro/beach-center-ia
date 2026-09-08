@@ -87,7 +87,7 @@ commita e faz push dos repositórios afetados. **NÃO** gera documentação — 
 
 5. **Encerramento**: Não gere documentação aqui. Informe que o próximo passo é
    `/speckit-documentation` para mapear os endpoints e atualizar
-   `beach-center-documentations/`.
+   `beach-center-documentation/`.
 
 ## Mandatory Post-Execution Hooks
 
