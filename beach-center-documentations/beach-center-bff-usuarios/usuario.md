@@ -65,7 +65,7 @@ Lista usuários cadastrados, com filtros opcionais por nome, e-mail e tipo de us
 |---|---|---|---|
 | name | string (query) | não | Filtra usuários pelo nome |
 | email | string (query) | não | Filtra usuários pelo e-mail |
-| user_type | string (query) | não | Filtra por tipo de usuário (`CLIENTE` ou `ADMIN`); repassado como texto, sem validação de enum na rota |
+| user_type | string (query) | não | Filtra por tipo de usuário (`CLIENTE`, `ADMIN` ou `PROFESSOR`); repassado como texto, sem validação de enum na rota |
 
 **Resposta de sucesso**: `200 OK`
 ```json
@@ -162,7 +162,7 @@ Atualiza nome, e-mail, telefone e tipo de usuário (`user_type`) de um usuário,
 | name | string | sim | Nome do usuário |
 | email | string | sim | E-mail (formato válido) |
 | phone | string | sim | Telefone; deve ser conversível para E.164 |
-| user_type | string | sim | Um de: `CLIENTE`, `ADMIN` |
+| user_type | string | sim | Um de: `CLIENTE`, `ADMIN`, `PROFESSOR` (o valor `PROFESSOR` habilita o usuário como responsável por uma turma em `beach-center-bff-aulas` — ver [`aula`](../beach-center-bff-aulas/aula.md)) |
 
 **Resposta de sucesso**: `200 OK`
 
