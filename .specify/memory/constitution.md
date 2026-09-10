@@ -1,14 +1,18 @@
 <!--
 Sync Impact Report
-- Version change: 1.3.0 → 1.3.1
-- Rationale (1.3.0 → 1.3.1, PATCH): Correção do caminho da documentação de endpoints — de `beach-center-documentations/` (plural) para `beach-center-documentation/` (singular), pasta única dentro do repositório `beach-center-ia`.
-- Modified principles: none
-- Modified sections:
-  - Comandos de Desenvolvimento: `/speckit-documentation` — caminho corrigido para `beach-center-documentation/[nome-repo]/[nome-rota].md`.
-- Added sections: none
+- Version change: 1.3.1 → 1.4.0
+- Rationale (1.3.1 → 1.4.0, MINOR): Adição do Princípio VI — "Arquitetura Orientada a Eventos para Validação de Comprovantes" — oficializando o fluxo assíncrono REST → MinIO → Fila → IA (modelo de visão Moondream) e a regra de comunicação exclusivamente por mensageria entre `beach-center-bff-injection` e `beach-center-bff-llm-engine`. Inclusão desses dois microsserviços na lista de fronteiras do Princípio I. MinIO documentado como storage padrão de comprovantes, substituindo o Google Drive (rate limit).
+- Modified principles:
+  - Princípio I (Fronteiras do Ecossistema de Micro-Serviços): adicionados `services/beach-center-bff-injection` e `services/beach-center-bff-llm-engine`; a regra "não é BFF" foi estendida explicitamente aos dois.
+- Modified sections: none
+- Added sections:
+  - Princípio VI — Arquitetura Orientada a Eventos para Validação de Comprovantes.
 - Removed sections: none
-- Deferred TODOs: none
+- Deferred TODOs:
+  - Infra reproduzível (containers MinIO + fila) no `beach-center-server/docker-compose.dev.yml` (Princípio IV) — task futura.
+  - Bootstrap e implementação de `beach-center-bff-injection` e `beach-center-bff-llm-engine` — tasks futuras.
 - Prior amendment history:
+  - 1.3.0 → 1.3.1 (PATCH): Correção do caminho da documentação de endpoints — de `beach-center-documentations/` (plural) para `beach-center-documentation/` (singular), pasta única dentro do repositório `beach-center-ia`.
   - 1.2.0 → 1.3.0 (MINOR): Removed documentation generation from `/speckit-complete`. Reworked `/speckit-documentation` to map endpoints and generate PT-BR documentation.
   - 1.2.0 (MINOR): Added dedicated test-generation commands (`/speckit-unit-tests` and `/speckit-component-tests`) and a strict local pre-push quality gate on `/speckit-complete` enforcing 80% test coverage...
   - 1.1.1 (PATCH): Set ratification date to 2026-08-27...
@@ -33,10 +37,12 @@ O ecossistema adota uma arquitetura de micro-serviços independente. Código MUS
   - `services/beach-center-bff-usuarios`: Microsserviço responsável pela gestão de usuários e autenticação (auth).
   - `services/beach-center-bff-aulas`: Microsserviço responsável pela gestão das aulas (A SER CRIADO).
   - `services/beach-center-whatsapp`: Serviço de integração e bot para WhatsApp.
+  - `services/beach-center-bff-injection`: Microsserviço de **ingestão e gestão inicial de comprovantes de pagamento** — recebe o upload do front-end, valida o arquivo estaticamente, envia ao storage (MinIO) e publica o evento de validação na fila. Stack: Node.js/TypeScript. (Ver Princípio VI.)
+  - `services/beach-center-bff-llm-engine`: Microsserviço **worker de validação visual de documentos por Inteligência Artificial** (visão computacional com o modelo Moondream), operando de forma **assíncrona** a partir de uma fila. Stack: Node.js/TypeScript, Moondream, Docker. (Ver Princípio VI.)
 - **Infraestrutura:**
   - `beach-center-server`: Configurações de gateway, orquestração de containers e scripts de infraestrutura.
 
-**ATENÇÃO (Regra de Arquitetura):** Apesar do sufixo `bff` presente na nomenclatura de alguns repositórios legados, o projeto **NÃO** utiliza o pattern de Backend For Frontend (BFF). Todos os serviços de backend listados acima MUST atuar como micro-serviços puros e independentes.
+**ATENÇÃO (Regra de Arquitetura):** Apesar do sufixo `bff` presente na nomenclatura de alguns repositórios legados, o projeto **NÃO** utiliza o pattern de Backend For Frontend (BFF). Todos os serviços de backend listados acima MUST atuar como micro-serviços puros e independentes. Isso inclui explicitamente `beach-center-bff-injection` e `beach-center-bff-llm-engine`: o prefixo `bff-` é mantido apenas por consistência com o legado, mas nenhum dos dois é um Backend for Frontend — `beach-center-bff-injection` é o **serviço de ingestão** (porta de entrada para upload de comprovantes), não uma camada de composição para a UI.
 
 ### II. Arquitetura Hexagonal e Fluxo de Domínio
 
@@ -91,6 +97,54 @@ A implementação de novas funcionalidades MUST seguir a ordem estrita abaixo:
 6. **`/speckit-test`**: Geração de cenários de testes exploratórios (Manual/QA).
 7. **`/speckit-complete`**: Validação local estrita e Push da pipeline.
 8. **`/speckit-documentation`**: Atualização e criação da documentação baseada nos endpoints do repositório.
+
+### VI. Arquitetura Orientada a Eventos para Validação de Comprovantes
+
+A validação de comprovantes de pagamento (verificação visual do documento por Inteligência Artificial) MUST ser executada **fora do caminho síncrono do usuário**, por meio de uma arquitetura orientada a eventos entre `beach-center-bff-injection` e `beach-center-bff-llm-engine`. O front-end **MUST NOT** aguardar a inferência de IA.
+
+**1. Serviço de ingestão (`beach-center-bff-injection`)** — deveres:
+- Receber o upload do comprovante via **REST** (multipart) do front-end.
+- Executar a **validação estática** do arquivo: aceitar **somente** os formatos `PDF`, `JPG` e `PNG`, com tamanho **máximo de 5 MB**.
+- Fazer o upload do arquivo para o **MinIO** (via S3 SDK).
+- Registrar o agendamento com o status **"Em Análise"**, associando a **URL gerada pelo MinIO** — a gravação MUST ser feita **via chamada REST interna (`x-api-key`) ao `beach-center-bff-agendamentos`**, que permanece o dono único da coleção de reservas.
+- **Publicar um evento** na fila de validação contendo, no mínimo, `{ id_agendamento, url_arquivo }`.
+- Responder ao cliente **imediatamente** com sucesso, informando que o documento está em processamento.
+
+**2. Motor de IA (`beach-center-bff-llm-engine`)** — deveres:
+- Atuar como **worker**, consumindo continuamente a fila de validação.
+- Baixar o arquivo do **MinIO** utilizando a URL recebida na mensagem.
+- Submeter a imagem ao **Moondream** (modelo de visão local, servido por container próprio) com um **prompt de classificação binária** — por exemplo: *"Este documento é um comprovante de transferência bancária ou PIX?"*.
+- Aplicar o resultado da inferência **via chamada REST interna (`x-api-key`) ao `beach-center-bff-agendamentos`**:
+  - **IA responde NÃO** → alterar o status do agendamento para **"Documento Inválido / Rejeitado"** e **liberar a quadra**.
+  - **IA responde SIM** → **manter o status "Em Análise"**, aguardando a revisão manual do admin no painel.
+
+**3. Regras de comunicação (NON-NEGOTIABLE):**
+- A comunicação entre `beach-center-bff-injection` e `beach-center-bff-llm-engine` **MUST** ocorrer **exclusivamente por mensageria assíncrona** — **RabbitMQ** ou **BullMQ sobre Redis** (a escolha da tecnologia fica a cargo da implementação). **MUST NOT** existir chamada **REST síncrona** entre esses dois serviços.
+- As escritas de `beach-center-bff-injection` e `beach-center-bff-llm-engine` no domínio de reservas **MUST** passar pela **REST interna do `beach-center-bff-agendamentos`** (`x-api-key`). Nenhum dos dois pode escrever diretamente na base de dados de reservas nem manter uma coleção paralela de status (Princípio I).
+
+**4. Storage — MinIO:** O **MinIO** (object storage S3-compatible, self-hosted) é o **storage padrão** para os arquivos de comprovante, **substituindo o Google Drive**. Justificativa: a API do Google Drive impõe **rate limit** incompatível com o volume de upload e download do fluxo de validação; o MinIO é local e não possui cota de API externa.
+
+**5. Fluxo sequencial de referência:**
+
+```
+1. Front-end        --REST (upload multipart)-->        beach-center-bff-injection
+2. bff-injection    --S3 SDK (putObject)-------->        MinIO
+3. bff-injection    --REST interna (x-api-key)-->        beach-center-bff-agendamentos   (status: "Em Análise" + url_arquivo)
+4. bff-injection    --publish { id_agendamento, url_arquivo }-->  Fila (RabbitMQ | BullMQ/Redis)
+5. bff-llm-engine   <--consume--------------------        Fila
+6. bff-llm-engine   --S3 SDK (getObject)-------->        MinIO   (download do arquivo)
+7. bff-llm-engine   --inferência visual----------->       Moondream   ("é comprovante de transferência/PIX?")
+8. bff-llm-engine   --REST interna (x-api-key)-->        beach-center-bff-agendamentos   ("Rejeitado" + libera a quadra | mantém "Em Análise")
+```
+
+A resposta ao front-end (passo 1) retorna **antes** da conclusão dos passos 5–8.
+
+**6. Conformidade com os demais princípios:** `beach-center-bff-injection` e `beach-center-bff-llm-engine`, por serem serviços Node.js/TypeScript, **MUST** seguir o **Princípio II** (Arquitetura Hexagonal — Ports & Adapters) e o **Princípio III** (ESLint estrito e cobertura de testes unitários ≥ 80%). O consumo da fila pelo `beach-center-bff-llm-engine` entra pela camada `applications/controllers/` (controllers de evento), conforme já previsto no Princípio II ("Recebem as requisições HTTP/Eventos").
+
+**7. Notas (não-normativas):**
+- Mapeamento com a máquina de estados de pagamento (referência: `tasks/006a-ciclo-de-vida-do-pagamento`): "Em Análise" corresponde a `waiting_approve`; "Documento Inválido / Rejeitado" corresponde a `rejected` (com liberação da quadra, mesma semântica de `rejected`/`cancelled`).
+- A infraestrutura reproduzível (containers do MinIO e da fila no `beach-center-server`, conforme o Princípio IV) e o bootstrap dos dois repositórios são **tasks futuras**.
+- A revisão de aprovação de comprovantes migra gradualmente de manual (admin no painel) para automática. O detalhamento desse aprendizado é direção futura e não é normatizado aqui.
 
 ---
 
@@ -163,4 +217,4 @@ Quando o usuário acionar os comandos abaixo, o assistente MUST atuar da seguint
 - Toda revisão de PR MUST verificar conformidade com esta Constituição.
 - Complexidade que viole a Arquitetura Hexagonal (Princípio II) ou a regra contra uso de BFFs (Princípio I) MUST ser explicitamente justificada ou rejeitada.
 
-**Version**: 1.3.1 | **Ratified**: 2026-08-30 | **Last Amended**: 2026-09-08
+**Version**: 1.4.0 | **Ratified**: 2026-08-30 | **Last Amended**: 2026-09-10
