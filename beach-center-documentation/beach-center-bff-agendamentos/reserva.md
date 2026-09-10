@@ -28,6 +28,8 @@ qualquer estado não-terminal  ──────→  cancelled
 
 > **Reembolso automático removido (task 006a):** `agendamentos` **não chama mais** `beach-center-bff-pagamentos`. Ao cancelar uma reserva `approved` com valor, apenas grava `refund_status: "manual"` — a devolução do valor é tratada por contato direto entre usuário e admin.
 
+> **Fluxo público por protocolo (task 006b):** além de consultar e cancelar, o cliente pode **reagendar** a reserva pelo protocolo (`PATCH /reservas/protocol/:number/reagendar`). Cancelamento e reagendamento só existem **a partir de `waiting_approve`** — enquanto a reserva está `pending` (sem comprovante), os três endpoints `protocol/*` respondem `404`. Ambos respeitam a **janela de 2 h** antes do agendamento mais cedo. Ao cancelar/reagendar uma reserva `approved`, `agendamentos` dispara uma notificação **não-bloqueante** por WhatsApp (`beach-center-whatsapp`, `POST /messages/send-by-key`) — uma falha de envio nunca reverte a operação já persistida.
+
 ## Autenticação/autorização
 
 | Rota | Guard |
@@ -35,6 +37,7 @@ qualquer estado não-terminal  ──────→  cancelled
 | `POST /reservas` | `authMiddleware` (Bearer — qualquer usuário autenticado) |
 | `GET /reservas/protocol/:number` | pública |
 | `PATCH /reservas/protocol/:number/cancel` | pública |
+| `PATCH /reservas/protocol/:number/reagendar` | pública |
 | `PATCH /reservas/:id/payment` | `internalApiKeyMiddleware` (somente `x-api-key`) |
 | `PATCH /reservas/:id/delete` | `authMiddleware` + `requireRole('ADMIN')` |
 | `GET /reservas/:id` | `adminOrInternalApiKey` (Bearer+ADMIN **ou** `x-api-key`) |
@@ -119,7 +122,9 @@ curl -X POST "https://<host>/api/v1/reservas" \
 
 ### GET /api/v1/reservas/protocol/:number
 
-Busca uma reserva pelo protocolo público (`number`). Aciona `FindReserveByProtocolUsecase`, que além dos dados da reserva calcula `can_cancel` e `cancellation_deadline` com base na regra de janela de cancelamento (2h antes do agendamento mais cedo vinculado; limite exato inclusive, `<=`). Reservas `cancelled`, `expired` ou sem agendamentos vinculados sempre retornam `can_cancel: false`.
+Busca uma reserva pelo protocolo público (`number`). Aciona `FindReserveByProtocolUsecase`, que além dos dados da reserva calcula as flags de janela: `can_cancel` / `cancellation_deadline` **e** `can_reschedule` / `reschedule_deadline` (task 006b — cancelar e reagendar usam a **mesma** regra: 2h antes do agendamento mais cedo vinculado, limite exato inclusive `<=`). As duas flags carregam sempre o mesmo valor. Reservas em estado terminal (`cancelled`, `rejected`, `expired`) ou sem agendamentos vinculados retornam ambas `false`; o `*_deadline` é omitido quando não há como calculá-lo.
+
+> **Task 006b:** enquanto a reserva está `pending` (sem comprovante), este endpoint responde **`404`** (`{"message": "Reserva nao encontrada"}`) — a página pública de protocolo só existe a partir de `waiting_approve`.
 
 **Parâmetros de path**
 
@@ -136,10 +141,12 @@ Busca uma reserva pelo protocolo público (`number`). Aciona `FindReserveByProto
   "data": {
     "id": "665f1a2b3c4d5e6f7a8b9c0d",
     "number": "1234567890",
-    "status": "pending",
+    "status": "waiting_approve",
     "scheduling_id": ["665f1a2b3c4d5e6f7a8b9c01"],
     "can_cancel": true,
-    "cancellation_deadline": "2026-09-08T16:00:00.000Z"
+    "cancellation_deadline": "2026-09-08T16:00:00.000Z",
+    "can_reschedule": true,
+    "reschedule_deadline": "2026-09-08T16:00:00.000Z"
   }
 }
 ```
@@ -149,7 +156,7 @@ Busca uma reserva pelo protocolo público (`number`). Aciona `FindReserveByProto
 | Código HTTP | Causa |
 |---|---|
 | 400 | `number` ausente/vazio no path (`"Numero de protocolo e obrigatorio"`, shape `{message: "Dados invalidos", errors: [...]}`) |
-| 404 | `{"message": "Reserva nao encontrada"}` — protocolo inexistente |
+| 404 | `{"message": "Reserva nao encontrada"}` — protocolo inexistente **ou** reserva ainda em `pending` |
 
 **Exemplo de chamada**
 
@@ -161,13 +168,21 @@ curl "https://<host>/api/v1/reservas/protocol/1234567890"
 
 ### PATCH /api/v1/reservas/protocol/:number/cancel
 
-Cancela uma reserva pelo protocolo, sem autenticação (fluxo público, ex.: cliente cancelando pelo link recebido). Aciona `DeleteReserveUsecase.executeByProtocol`, que localiza a reserva pelo protocolo, bloqueia se já estiver `cancelled` ou `expired`, e delega a `execute(id)` — mesma lógica de `PATCH /reservas/:id/delete` (janela de 2h; `refund_status: "manual"` se a reserva estava `approved` com valor).
+Cancela uma reserva pelo protocolo, sem autenticação (fluxo público, ex.: cliente cancelando pelo link recebido). Aciona `DeleteReserveUsecase.executeByProtocol`, que localiza a reserva pelo protocolo, retorna `404` se ainda estiver `pending` (B-btn — task 006b), bloqueia se já estiver `cancelled` ou `expired`, e delega a `execute(id, { motivo })` — mesma lógica de `PATCH /reservas/:id/delete` (janela de 2h; `refund_status: "manual"` se a reserva estava `approved` com valor).
+
+Quando a reserva cancelada estava **`approved`**, dispara — de forma **não-bloqueante** — o WhatsApp `cancelamento-reembolso` (`nome`, `protocolo` e `motivo` quando informado) via `beach-center-whatsapp`.
 
 **Parâmetros de path**
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `number` | string | Sim | Número do protocolo da reserva |
+
+**Corpo da requisição** (opcional — o frontend atual cancela **sem** corpo)
+
+| Campo | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `motivo` | string | Não | Motivo do cancelamento (`.trim()`, máx. 280). Registrado no log e repassado ao template de WhatsApp quando presente |
 
 **Resposta de sucesso**
 
@@ -185,16 +200,98 @@ Cancela uma reserva pelo protocolo, sem autenticação (fluxo público, ex.: cli
 
 | Código HTTP | Causa |
 |---|---|
-| 400 | `number` ausente/vazio (`"Numero de protocolo e obrigatorio"`) |
+| 400 | `number` ausente/vazio (`"Numero de protocolo e obrigatorio"`) / `motivo` acima de 280 caracteres (`"Dados invalidos"`) |
 | 400 | `"Reserva so pode ser cancelada ate 2 horas antes do primeiro agendamento"` |
-| 404 | `{"message": "Reserva nao encontrada"}` — protocolo inexistente |
+| 404 | `{"message": "Reserva nao encontrada"}` — protocolo inexistente **ou** reserva ainda em `pending` |
 | 409 | `{"message": "Reserva ja foi cancelada"}` — reserva já estava `cancelled` |
 | 409 | `{"message": "Reserva expirada"}` — reserva já estava `expired` |
 
 **Exemplo de chamada**
 
 ```bash
-curl -X PATCH "https://<host>/api/v1/reservas/protocol/1234567890/cancel"
+curl -X PATCH "https://<host>/api/v1/reservas/protocol/1234567890/cancel" \
+  -H "Content-Type: application/json" \
+  -d '{"motivo": "Imprevisto"}'
+```
+
+---
+
+### PATCH /api/v1/reservas/protocol/:number/reagendar
+
+**Rota pública (task 006b).** Reagenda uma reserva pelo protocolo — **refaz a seleção inteira de horários**, mantendo a mesma quantidade (1 a 3). Aciona `RescheduleReserveByProtocolUsecase`:
+
+1. `motivo` é **obrigatório** (400 senão).
+2. Localiza a reserva pelo protocolo (`404` se não existe; `404` se `pending`; `409` `"Reserva não pode mais ser reagendada"` se terminal).
+3. Aplica a **janela de 2 h** sobre os agendamentos **atuais** (409 senão).
+4. `slots` precisa ter exatamente a mesma quantidade de horários da reserva (409 `"O reagendamento deve manter o mesmo numero de horarios"`).
+5. Resolve cada `slot` para um `scheduling` **já existente** (mesma `unit`/`court`/`date`/`start_time`) via `findSchedulingsByExactSlots` — 409 `"Horario indisponivel para reagendamento"` se algum não casar.
+6. Revalida os novos horários: limite de 3, não no passado, sem conflito com exceção recorrente `CONFIRMED`, disponíveis, e janela de 2 h em **cada** novo slot.
+7. Bloqueia os novos `scheduling`s, re-vincula a reserva (`scheduling_id`), libera os antigos elegíveis, grava auditoria na coleção `reserva_reagendamento_auditorias` (`motivo`, `slots_anteriores[]`, `slots_novos[]`).
+8. Dispara — **não-bloqueante** — o WhatsApp `reagendamento-confirmado` (`nome`, `protocolo`, `novo_dia`, `novo_horario`, `quadra` do primeiro novo horário).
+
+> O status da reserva **não muda** — só o conjunto de horários. Pagamento/comprovante seguem como estavam.
+
+**Parâmetros de path**
+
+| Campo | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `number` | string | Sim | Número do protocolo da reserva |
+
+**Corpo da requisição**
+
+| Campo | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `motivo` | string | Sim | `.trim()`, 1 a 280 caracteres — gravado na auditoria |
+| `slots` | object[] | Sim | 1 a 3 itens, **mesma quantidade** de horários da reserva atual |
+| `slots[].unit` | string | Sim | ObjectId (24 hex) da unidade |
+| `slots[].court` | string | Sim | ObjectId (24 hex) da quadra |
+| `slots[].date` | string | Sim | `"YYYY-MM-DD"` |
+| `slots[].start_time` | string | Sim | `"HH:MM"` |
+| `slots[].end_time` | string | Sim | `"HH:MM"` |
+
+**Resposta de sucesso**
+
+`200 OK`
+```json
+{
+  "message": "Reserva reagendada com sucesso",
+  "data": {
+    "id": "665f1a2b3c4d5e6f7a8b9c0d",
+    "number": "1234567890",
+    "status": "approved",
+    "scheduling_id": ["665f1a2b3c4d5e6f7a8b9c99"],
+    "...": "..."
+  }
+}
+```
+
+**Erros possíveis**
+
+| Código HTTP | Causa |
+|---|---|
+| 400 | `"Dados invalidos"` (DTO — `motivo`/`slots` inválidos) |
+| 400 | `"Motivo é obrigatório para reagendar"` |
+| 400 | `"Horario invalido no reagendamento"` — `start_time`/`end_time` fora de `HH:MM` |
+| 400 | `"Nao e permitido criar reserva para datas que ja passaram"` |
+| 404 | `{"message": "Reserva nao encontrada"}` — protocolo inexistente **ou** reserva em `pending` |
+| 409 | `"Reserva não pode mais ser reagendada"` — reserva em estado terminal |
+| 409 | `"Reserva so pode ser reagendada ate 2 horas antes do primeiro agendamento"` |
+| 409 | `"O reagendamento deve manter o mesmo numero de horarios"` |
+| 409 | `"Horario indisponivel para reagendamento"` — nenhum `scheduling` corresponde ao slot pedido |
+| 409 | `"Novo horario deve comecar ao menos 2 horas a partir de agora"` |
+| 409 | `"Um ou mais horarios selecionados possuem excecao de agendamento"` / `"Um ou mais horarios selecionados nao estao disponiveis"` |
+
+**Exemplo de chamada**
+
+```bash
+curl -X PATCH "https://<host>/api/v1/reservas/protocol/1234567890/reagendar" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "motivo": "Conflito de agenda do cliente",
+    "slots": [
+      { "unit": "665d1a2b3c4d5e6f7a8b9c00", "court": "665c1a2b3c4d5e6f7a8b9c01", "date": "2026-09-20", "start_time": "18:00", "end_time": "19:00" }
+    ]
+  }'
 ```
 
 ---
@@ -497,11 +594,14 @@ curl -X PATCH "https://<host>/api/v1/reservas/665f1a2b3c4d5e6f7a8b9c0d/status" \
 ## Referências
 
 - Rota: `src/applications/routes/reserva.route.ts`
-- Controllers: `src/applications/controllers/reserva/create/create-reserve.controller.ts`, `.../find-by-protocol/find-by-protocol.controller.ts`, `.../cancel-by-protocol/cancel-reserve-by-protocol.controller.ts`, `.../payment-metadata/update-payment-metadata.controller.ts`, `.../delete/delete-reserve.controller.ts`, `.../read/read-reserve.controller.ts`, `.../list/list-reserves.controller.ts`, `.../update/update-reserve.controller.ts`, `src/applications/controllers/shared/update-reserve-and-scheduling-status.controller.ts`
-- Usecases: `src/domain/usecases/reserva/create/create-reserve.usecase.ts`, `.../find-by-protocol/find-by-protocol.usecase.ts`, `.../delete/delete-reserve.usecase.ts`, `.../update-payment-metadata/update-payment-metadata.usecase.ts`, `.../read/read-reserve.usecase.ts`, `.../list/list-reserves.usecase.ts`, `.../update/update-reserve.usecase.ts`, `.../shared/expire-pending-reserves.usecase.ts`, `src/domain/usecases/shared/update-reserve-and-scheduling-status.usecase.ts`
-- Regras compartilhadas: `src/domain/usecases/shared/reserve-scheduling.validator.ts`, `.../reserve-cancellation-window.ts`, `.../scheduling-availability.service.ts`, `.../event-conflict.service.ts`
+- Controllers: `src/applications/controllers/reserva/create/create-reserve.controller.ts`, `.../find-by-protocol/find-by-protocol.controller.ts`, `.../cancel-by-protocol/cancel-reserve-by-protocol.controller.ts`, `.../reschedule-by-protocol/reschedule-reserve-by-protocol.controller.ts`, `.../payment-metadata/update-payment-metadata.controller.ts`, `.../delete/delete-reserve.controller.ts`, `.../read/read-reserve.controller.ts`, `.../list/list-reserves.controller.ts`, `.../update/update-reserve.controller.ts`, `src/applications/controllers/shared/update-reserve-and-scheduling-status.controller.ts`
+- Usecases: `src/domain/usecases/reserva/create/create-reserve.usecase.ts`, `.../find-by-protocol/find-by-protocol.usecase.ts`, `.../delete/delete-reserve.usecase.ts`, `.../reschedule-by-protocol/reschedule-reserve-by-protocol.usecase.ts`, `.../update-payment-metadata/update-payment-metadata.usecase.ts`, `.../read/read-reserve.usecase.ts`, `.../list/list-reserves.usecase.ts`, `.../update/update-reserve.usecase.ts`, `.../shared/expire-pending-reserves.usecase.ts`, `src/domain/usecases/shared/update-reserve-and-scheduling-status.usecase.ts`
+- Regras compartilhadas: `src/domain/usecases/shared/reserve-scheduling.validator.ts`, `.../reserve-cancellation-window.ts`, `.../agendamento-time-window.ts` (janela de 2 h reutilizável — task 006b), `.../scheduling-availability.service.ts`, `.../event-conflict.service.ts`
 - Protocolo tardio: `src/domain/ports/output/protocol-uniqueness.port.ts`, `src/infra/adapters/protocol/is-protocol-number-taken/`, `src/infra/adapters/reserva/set-protocol-number/set-reserve-protocol-number.adapter.ts`
+- Reagendamento por protocolo (task 006b): `src/domain/ports/output/reserve-persistence.port.ts` (`ISetReserveSchedulingsPort`), `src/infra/adapters/reserva/set-schedulings/set-reserve-schedulings.adapter.ts`, `src/domain/models/reserva-reagendamento-auditoria.model.ts`, `src/domain/ports/output/reserva-reagendamento-auditoria-persistence.port.ts`, `src/infra/adapters/reserva_reagendamento_auditoria/create/create-reserva-reagendamento-auditoria.adapter.ts`, `src/infra/schemas/reserva-reagendamento-auditoria.schema.ts` (coleção `reserva_reagendamento_auditorias`)
+- WhatsApp (task 006b): `src/domain/ports/output/whatsapp-notification.port.ts`, `src/infra/adapters/whatsapp/send-whatsapp-notification.adapter.ts` (`POST {WHATSAPP_API_URL}/messages/send-by-key`, `x-api-key`; **nunca lança**), env `WHATSAPP_API_URL` / `WHATSAPP_INTERNAL_API_KEY` (`src/config/env.ts`)
 - Expiração lazy: `src/infra/adapters/reserva/list-pending-older-than/list-pending-reserves-older-than.adapter.ts`
-- DTOs: `src/applications/dto/create-reserva.dto.ts`, `update-reserva.dto.ts`, `update-payment-metadata.dto.ts`, `update-status.dto.ts`, `find-by-protocol.dto.ts`, `reserva-equipment.mapper.ts`
+- DTOs: `src/applications/dto/create-reserva.dto.ts`, `update-reserva.dto.ts`, `update-payment-metadata.dto.ts`, `update-status.dto.ts`, `find-by-protocol.dto.ts`, `cancel-by-protocol.dto.ts`, `reschedule-by-protocol.dto.ts`, `reserva-equipment.mapper.ts`
 - Modelo: `src/domain/models/reserva.model.ts`
 - Erros de domínio: `src/domain/errors.ts`
+- Consumidor externo do WhatsApp: [`../beach-center-whatsapp/mensagem.md`](../beach-center-whatsapp/mensagem.md)

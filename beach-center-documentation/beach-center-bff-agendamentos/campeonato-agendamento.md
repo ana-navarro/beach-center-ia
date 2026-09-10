@@ -19,6 +19,7 @@ Um `campeonato_agendamento` `CONFIRMED` é a **4ª fonte** do `EventConflictServ
 - **Regra de bloqueio assimétrica (campeonato):** a **última** partida de cada quadra/dia tem `hora_fim` **estendido até o fechamento da unidade** (jogo tardio "estoura" o previsto). As demais mantêm o fim exato da duração. (O `ranking_agendamento` NÃO estende — ver [`ranking-agendamento.md`](ranking-agendamento.md).)
 - **`hora_inicio`/`hora_fim`** são strings `"HH:MM"`; **`data`** é `"YYYY-MM-DD"`.
 - **Auditoria de troca de dia:** cada `trocar-dia` bem-sucedido grava um registro em `campeonato_agendamento_auditorias` (`usuario_nome`, `motivo`, `dia_anterior`, `dia_novo`, `created_at`).
+- **Janela de 2 h (task 006b):** `trocar-dia` só é permitido até **2 horas antes** do `hora_inicio` do agendamento atual (`data` + `hora_inicio`, limite inclusive). Fora da janela → `409` (`ConflictError`), antes mesmo da checagem de conflito. Regra compartilhada com `ranking-agendamento` e com o fluxo público por protocolo da `reserva` (`src/domain/usecases/shared/agendamento-time-window.ts`).
 
 ## Autenticação/autorização
 
@@ -283,8 +284,9 @@ Troca **somente o dia** (`data`) — quadra/horário/modalidade ficam intactos. 
 
 1. Valida `motivo` (obrigatório) e `id`.
 2. Lê o agendamento (404 senão); só `CONFIRMED` (400 senão).
-3. `dia_novo` deve ser diferente do atual e não passado (400 senão).
-4. Detecta conflitos no **novo** slot (bloqueadores + reservas ativas, excluindo o próprio agendamento).
+3. **Janela de 2 h (task 006b)**: só até 2 h antes de `data` + `hora_inicio` atuais → **409** `Só é possível trocar o dia até 2 horas antes do horário do agendamento`.
+4. `dia_novo` deve ser diferente do atual e não passado (400 senão).
+5. Detecta conflitos no **novo** slot (bloqueadores + reservas ativas, excluindo o próprio agendamento).
    - Há conflito e `cancelar_conflitos` ≠ `true` → **409** `CampeonatoAgendamentoConflictError` (mesma forma do `POST`), **não move nada**.
    - `cancelar_conflitos: true` (ou sem conflito) → cancela os conflitantes, libera o slot antigo, atualiza `data`, aplica bloqueio no novo slot, grava auditoria.
 
@@ -311,6 +313,7 @@ Troca **somente o dia** (`data`) — quadra/horário/modalidade ficam intactos. 
 | 400 | `Dados inválidos` / `Motivo é obrigatório para trocar o dia` / `ID inválido` / `Só é possível trocar o dia de um agendamento CONFIRMED` / `O novo dia deve ser diferente do dia atual` / `Não é possível trocar para uma data passada` |
 | 401 | `Unauthorized` |
 | 404 | `Agendamento de campeonato não encontrado` |
+| 409 | `Só é possível trocar o dia até 2 horas antes do horário do agendamento` (janela de 2 h — task 006b) |
 | 409 | `CampeonatoAgendamentoConflictError` — novo dia tem conflito e `cancelar_conflitos` ≠ `true` |
 
 **Exemplo de chamada**
@@ -326,7 +329,7 @@ curl -X PATCH http://agendamentos:5000/api/v1/campeonato-agendamentos/665f.../tr
 - Middleware: `src/applications/middlewares/internal-api-key.middleware.ts`
 - Controllers: `src/applications/controllers/campeonato_agendamento/{create-bulk,read,list,list-auditoria,update,delete,change-day}/*.controller.ts`
 - Usecases: `src/domain/usecases/campeonato-agendamento/{create-bulk,read,list,update,delete,change-day,list-auditoria}/*.usecase.ts` + `shared/campeonato-agendamento-conflict.error.ts`
-- Serviços de domínio compartilhados: `src/domain/usecases/shared/{slot-allocator,conflict-resolution.service,event-conflict.service,event-scheduling-impact.service}.ts`
+- Serviços de domínio compartilhados: `src/domain/usecases/shared/{slot-allocator,conflict-resolution.service,event-conflict.service,event-scheduling-impact.service,agendamento-time-window}.ts` (`agendamento-time-window` = janela de 2 h — task 006b)
 - Adapters: `src/infra/adapters/campeonato_agendamento/{create-many,read,list,update,set-status,change-data,delete-bulk,find-confirmed-by-court-unit}/*.adapter.ts` + `src/infra/adapters/campeonato_agendamento_auditoria/{create,list}/*.adapter.ts`
 - Schemas: `src/infra/schemas/campeonato-agendamento.schema.ts` (coleção `campeonato_agendamentos`), `src/infra/schemas/campeonato-agendamento-auditoria.schema.ts` (coleção `campeonato_agendamento_auditorias`)
 - DTOs: `src/applications/dto/campeonato-agendamento-bulk.dto.ts`, `src/applications/dto/campeonato-agendamento.dto.ts`

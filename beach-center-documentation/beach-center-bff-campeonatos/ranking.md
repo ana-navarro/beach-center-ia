@@ -137,7 +137,7 @@ Agenda as partidas pendentes do ranking. Aciona `AgendarRankingUsecase`:
 
 1. Lê o ranking (404 senão); precisa estar `ATIVO` (400) e `modo='PARTIDAS'` (400 `Ranking 'GERAL' não tem partidas pra agendar`).
 2. Lista partidas `ATIVA` sem `id_agendamento` (400 `Nenhuma partida pendente de agendamento para este ranking` se vazio).
-3. Chama `POST /ranking-agendamentos` em `agendamentos` com `quantidade` = nº de partidas pendentes. **Atômico** — se qualquer slot conflitar, `agendamentos` responde 409 e nada é persistido lá.
+3. Chama `POST /ranking-agendamentos` em `agendamentos` com `quantidade` = nº de partidas pendentes (e `cliente` = `contato`, quando informado). **Atômico** — se qualquer slot conflitar, `agendamentos` responde 409 e nada é persistido lá.
 4. Liga cada partida ao `id` retornado, por índice.
 
 **Parâmetros de path**
@@ -154,6 +154,7 @@ Agenda as partidas pendentes do ranking. Aciona `AgendarRankingUsecase`:
 | `datas` | string[] | Sim | `"YYYY-MM-DD"`. Mínimo 1 |
 | `hora_inicio` | string | Sim | `"HH:MM"` |
 | `duracao_partida_minutos` | number | Sim | Inteiro positivo |
+| `contato` | object | Não | `{ nome, email, telefone }` — contato do responsável (task 006b). Repassado a `agendamentos` como `cliente` em **todas** as partidas do lote; vira o destinatário das notificações de WhatsApp de cancelamento/reagendamento por protocolo |
 
 > Não há `cancelar_conflitos` — ranking não tem fluxo de decisão.
 
@@ -176,7 +177,7 @@ Agenda as partidas pendentes do ranking. Aciona `AgendarRankingUsecase`:
 ```bash
 curl -X POST http://campeonatos:5003/api/v1/rankings/665a.../agendar \
   -H "Authorization: Bearer $ID_TOKEN" -H "Content-Type: application/json" \
-  -d '{ "quadras": ["665c..."], "datas": ["2026-10-18"], "hora_inicio": "20:00", "duracao_partida_minutos": 60 }'
+  -d '{ "quadras": ["665c..."], "datas": ["2026-10-18"], "hora_inicio": "20:00", "duracao_partida_minutos": 60, "contato": { "nome": "João", "email": "joao@example.com", "telefone": "11999998888" } }'
 ```
 
 ## Referências

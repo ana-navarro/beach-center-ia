@@ -22,6 +22,7 @@ beach-center-documentation/
 | `beach-center-bff-campeonatos` | `campeonato`, `partida`, `ranking` |
 | `beach-center-bff-pagamentos` | `checkout`, `comprovante-pagamento`, `forma-pagamento`, `webhook-getnet` |
 | `beach-center-bff-usuarios` | `auth`, `usuario` |
+| `beach-center-whatsapp` | `mensagem`, `modelo-mensagem`, `webhook` |
 
 ## Estrutura de cada documento
 
