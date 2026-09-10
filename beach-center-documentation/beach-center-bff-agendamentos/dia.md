@@ -130,18 +130,18 @@ mais sensível do serviço:
    recorte (mesma lógica de `POST /dias`, porém sem validar os horários enviados — não há campo de
    horário nesta rota) antes de localizar o dia.
 3. Busca os agendamentos a fechar (escopados por `court`/`unit`, se informados) e verifica se
-   existem **reservas ativas** (`pending`/`approved`) vinculadas a esses agendamentos
-   (`findActiveReservesForSchedulingsPort`).
+   existem **reservas ativas** (`pending`/`waiting_approve`/`approved`) vinculadas a esses
+   agendamentos (`findActiveReservesForSchedulingsPort`).
 4. **Se houver reservas ativas e `cancel_reserves !== true`**: a operação é abortada e o
    controller retorna o shape especial `CLOSE_DATE_RESERVE_CONFLICT` (ver seção de erros abaixo) —
    nada é fechado.
 5. **Se houver reservas ativas e `cancel_reserves === true`**: para cada reserva ativa, o usecase
    chama `DeleteReserveUseCase.execute(reserve.id, { skipCancellationTimeValidation: true })` —
-   ou seja, reaproveita exatamente a mesma lógica de cancelamento/estorno do endpoint
+   ou seja, reaproveita exatamente a mesma lógica de cancelamento do endpoint
    `PATCH /reservas/:id/delete` (ver documentação de `reserva.md`), porém **ignorando a janela de
-   2 horas antes do primeiro agendamento**. Se a reserva tiver `payment_id`, o estorno é
-   solicitado via `IRefundPaymentPort` (chamada HTTP para `beach-center-bff-pagamentos`) como
-   parte dessa chamada reaproveitada.
+   2 horas antes do primeiro agendamento**. Se a reserva estava `approved` com valor > 0, apenas
+   grava `refund_status: "manual"` — o reembolso automático foi removido na task 006a (nenhuma
+   chamada HTTP a `beach-center-bff-pagamentos`).
 6. Marca os agendamentos escopados como fechados (`closed_scheduling_ids` do dia) e indisponíveis
    (`available: false`).
 7. `opened` do dia só é definido como `false` quando **nem `court` nem `unit`** foram informados
@@ -155,7 +155,7 @@ mais sensível do serviço:
 | `day` | string | sim | Data no formato `YYYY-MM-DD` |
 | `court` | string (ObjectId 24-hex) | não | Escopa o fechamento a uma quadra — exige `unit` junto |
 | `unit` | string (ObjectId 24-hex) | não | Escopa o fechamento a uma unidade — exige `court` junto |
-| `cancel_reserves` | boolean | não | Se `true`, cancela e estorna automaticamente as reservas ativas vinculadas em vez de retornar conflito |
+| `cancel_reserves` | boolean | não | Se `true`, cancela automaticamente as reservas ativas vinculadas (marcando `refund_status: "manual"` nas que estavam pagas) em vez de retornar conflito |
 
 **Resposta de sucesso** — `200`:
 ```json
