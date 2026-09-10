@@ -1082,5 +1082,14 @@ Falta, nesta ordem:
    15 edge cases (ED-01..ED-15), 11 itens de regressão (RG-01..RG-11). Todos os 28 AC rastreados a
    ≥ 1 cenário; 6 cenários marcados como "só manual" (integração/infra/limites). Nenhum código
    alterado.
-5. `/speckit-complete` → `/speckit-documentation` (esta última precisa documentar os dois serviços
-   e o contrato de integração entre eles — algo novo no ecossistema).
+5. ~~`/speckit-complete`~~ — **concluído (2026-09-09).** Quality Gate Local 100% verde nos 2 repos:
+   ESLint 0 erros; agendamentos 275 suites/1289 testes, cobertura 98.85% stmts / 92.8% branches;
+   campeonatos 83 suites/329 testes, cobertura 98.63% stmts / 88.4% branches; Cypress N/A (backend
+   puro). Commits em branch `feat/task-005-agendamento-campeonato-ranking` nos 3 repos e push:
+   - `beach-center-bff-agendamentos` c41978c
+   - `beach-center-bff-campeonatos` 6a32bba
+   - `beach-center-ia` 13eb26a (+ este commit de doc)
+   Sem CI configurada em nenhum repo (consistente com task 004). PRs **não** abertos/mergeados;
+   submódulos apontam para a branch de feature (reapontar para a `main` após o merge).
+6. `/speckit-documentation` — mapear os endpoints dos dois serviços e o contrato de integração
+   entre eles (padrão novo dry-run+confirm no ecossistema) em `beach-center-documentation/`.
