@@ -18,11 +18,12 @@ Introduzido pela task 005. Cada registro = **1 quadra = 1 data = 1 partida**. `i
 | Janela de bloqueio | Estende a última partida do dia até o fechamento da unidade | **Janela exata** `hora_inicio`–`hora_fim`, sem extensão |
 | Pagamento | Não | `numero_protocolo` único global + comprovante (`status` `pending` → `waiting_approve`) |
 
-Um `ranking_agendamento` não-`cancelled` é a **5ª fonte** do `EventConflictService` (bloqueio pontual por data). O bloqueio vale **desde a criação** (`status: 'pending'`), independente do andamento do pagamento — não há um `CONFIRMED` separado.
+Um `ranking_agendamento` não-`cancelled` e não-`expired` é a **5ª fonte** do `EventConflictService` (bloqueio pontual por data). O bloqueio vale **desde a criação** (`status: 'pending'`), independente do andamento do pagamento — não há um `CONFIRMED` separado.
 
 **Conceitos-chave:**
 
-- **`status`**: `pending` | `waiting_approve` | `approved` | `rejected` | `cancelled` (tipo próprio, independente de `IReserveStatus` da reserva comum).
+- **`status`**: `pending` | `waiting_approve` | `approved` | `rejected` | `cancelled` | `expired` (tipo próprio, independente de `IReserveStatus` da reserva comum).
+- **Expiração lazy (task 006a)**: um `ranking_agendamento` `pending` (**sem comprovante**) com `createdAt` anterior a `agora − 24 h` é marcado `expired` e tem o bloqueio da sua janela liberado. A varredura (`ExpirePendingRankingAgendamentosUsecase`) roda a cada `GET /api/v1/ranking-agendamentos` — não há cron. `waiting_approve` (comprovante já enviado) **nunca** expira.
 - **`numero_protocolo`**: 10 dígitos, gerado com `customAlphabet('0123456789', 10)`, **único globalmente** — checado contra `reservas.number` **e** `ranking_agendamentos.numero_protocolo` antes de persistir (regenera em caso de colisão).
 - **`comprovante`** (subdocumento, opcional): `{ file_name, mime_type, storage: 'google_drive' | 'database', drive_file_id?, data?, view_url?, preview_url? }`. Com as env vars `GOOGLE_DRIVE_*` configuradas → upload real no Drive (`storage: 'google_drive'`). Sem elas → fallback base64 no próprio documento (`storage: 'database'`, campo `data`).
 - **`unit` é derivado** de `quadras[0]` no `POST` (todas as quadras devem pertencer à mesma unidade).
@@ -100,14 +101,14 @@ curl -X POST http://agendamentos:5000/api/v1/ranking-agendamentos \
 
 ### GET /api/v1/ranking-agendamentos
 
-Lista agendamentos com filtros opcionais. Aciona `ListRankingAgendamentosUsecase`.
+Lista agendamentos com filtros opcionais. Aciona `ListRankingAgendamentosUsecase`, que **antes de listar roda a varredura de expiração** (`ExpirePendingRankingAgendamentosUsecase`): todo `ranking_agendamento` `pending` com mais de 24 h de `createdAt` sem comprovante passa a `expired` e libera o bloqueio da sua janela. Lazy, sem cron.
 
 **Parâmetros de query**
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `id_ranking` | string | Não | Filtra pelo ranking |
-| `status` | string | Não | `pending` \| `waiting_approve` \| `approved` \| `rejected` \| `cancelled` |
+| `status` | string | Não | `pending` \| `waiting_approve` \| `approved` \| `rejected` \| `cancelled` \| `expired` |
 
 **Resposta de sucesso** — `200 OK`
 ```json
@@ -302,9 +303,9 @@ Troca **somente o dia** (`data`). Aciona `ChangeDayRankingAgendamentoUsecase`. D
 - Rota: `src/applications/routes/ranking-agendamento.route.ts` (montada em `routes.ts` como `/ranking-agendamentos`; `internalApiKeyMiddleware` por rota, exceto a pública de comprovante)
 - Middleware: `src/applications/middlewares/internal-api-key.middleware.ts`
 - Controllers: `src/applications/controllers/ranking_agendamento/{create-bulk,read,list,list-auditoria,update,delete,change-day,attach-proof}/*.controller.ts`
-- Usecases: `src/domain/usecases/ranking-agendamento/{create-bulk,read,list,update,delete,change-day,list-auditoria,attach-proof}/*.usecase.ts` + `shared/ranking-agendamento-conflict.error.ts`
+- Usecases: `src/domain/usecases/ranking-agendamento/{create-bulk,read,list,update,delete,change-day,list-auditoria,attach-proof}/*.usecase.ts` + `shared/{ranking-agendamento-conflict.error,expire-pending-ranking-agendamentos.usecase}.ts`
 - Serviços de domínio compartilhados: `src/domain/usecases/shared/{slot-allocator,event-conflict.service,event-scheduling-impact.service}.ts`
-- Adapters: `src/infra/adapters/ranking_agendamento/{create-many,read,find-by-protocol,list,update,set-status,change-data,set-comprovante,delete-bulk,find-confirmed-by-court-unit}/*.adapter.ts` + `src/infra/adapters/ranking_agendamento_auditoria/{create,list}/*.adapter.ts` + `src/infra/adapters/protocol/is-protocol-number-taken/*.adapter.ts` + `src/infra/adapters/file-storage/google-drive-file-storage.adapter.ts`
+- Adapters: `src/infra/adapters/ranking_agendamento/{create-many,read,find-by-protocol,list,list-pending-older-than,update,set-status,change-data,set-comprovante,delete-bulk,find-confirmed-by-court-unit}/*.adapter.ts` + `src/infra/adapters/ranking_agendamento_auditoria/{create,list}/*.adapter.ts` + `src/infra/adapters/protocol/is-protocol-number-taken/*.adapter.ts` + `src/infra/adapters/file-storage/google-drive-file-storage.adapter.ts`
 - Schemas: `src/infra/schemas/ranking-agendamento.schema.ts` (coleção `ranking_agendamentos`, índice único `numero_protocolo`), `src/infra/schemas/ranking-agendamento-auditoria.schema.ts`
 - DTOs: `src/applications/dto/ranking-agendamento-bulk.dto.ts`, `src/applications/dto/ranking-agendamento.dto.ts`, `src/applications/dto/ranking-agendamento-comprovante.dto.ts`
 - Modelos: `src/domain/models/ranking-agendamento.model.ts`, `src/domain/models/ranking-agendamento-auditoria.model.ts`

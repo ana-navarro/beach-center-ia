@@ -20,7 +20,7 @@ beach-center-documentation/
 | `beach-center-bff-agendamentos` | `agendamento`, `aula-bloqueio`, `campeonato-agendamento`, `dia`, `evento-agendado`, `link-reserva-publica`, `mensalista`, `mensalista-plano`, `quadra`, `ranking-agendamento`, `reserva`, `unidade` |
 | `beach-center-bff-aulas` | `aula`, `aluno` |
 | `beach-center-bff-campeonatos` | `campeonato`, `partida`, `ranking` |
-| `beach-center-bff-pagamentos` | `checkout`, `comprovante-pagamento`, `forma-pagamento`, `reembolso`, `webhook-getnet` |
+| `beach-center-bff-pagamentos` | `checkout`, `comprovante-pagamento`, `forma-pagamento`, `webhook-getnet` |
 | `beach-center-bff-usuarios` | `auth`, `usuario` |
 
 ## Estrutura de cada documento
