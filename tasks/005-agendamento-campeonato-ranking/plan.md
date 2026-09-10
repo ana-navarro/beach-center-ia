@@ -1091,5 +1091,16 @@ Falta, nesta ordem:
    - `beach-center-ia` 13eb26a (+ este commit de doc)
    Sem CI configurada em nenhum repo (consistente com task 004). PRs **não** abertos/mergeados;
    submódulos apontam para a branch de feature (reapontar para a `main` após o merge).
-6. `/speckit-documentation` — mapear os endpoints dos dois serviços e o contrato de integração
-   entre eles (padrão novo dry-run+confirm no ecossistema) em `beach-center-documentation/`.
+6. ~~`/speckit-documentation`~~ — **concluído (2026-09-09).** 5 arquivos em `beach-center-documentation/`:
+   - `beach-center-bff-agendamentos/campeonato-agendamento.md` (8 endpoints, rota interna `x-api-key`)
+   - `beach-center-bff-agendamentos/ranking-agendamento.md` (9 endpoints, 8 internas + 1 pública de comprovante)
+   - `beach-center-bff-campeonatos/campeonato.md` (6 endpoints, ADMIN) — inclui `POST /:id/agendar`
+   - `beach-center-bff-campeonatos/ranking.md` (6 endpoints, ADMIN)
+   - `beach-center-bff-campeonatos/partida.md` (6 endpoints, ADMIN) — inclui `trocar-dia`
+   `beach-center-documentation/README.md` atualizado (nova linha do serviço `beach-center-bff-campeonatos`).
+   Docs **não commitadas** (o comando não commita — cabe incluir no PR de docs junto do plano).
+
+## Ciclo Speckit — concluído
+
+Toda a esteira do Princípio V rodou nesta task. Pendências operacionais (fora do ciclo): abrir e
+mergear os PRs dos 3 repos; reapontar os submódulos de `beach-center-ia` para a `main` pós-merge.
