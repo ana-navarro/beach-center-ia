@@ -1,24 +1,35 @@
 # Comprovante de Pagamento Manual
 
 ## Visão geral
+
 Conjunto de endpoints do serviço `services/beach-center-bff-pagamentos` (base `/api/v1`) para
-submissão e revisão de **comprovantes de pagamento manual** (ex.: PIX fora do gateway, comprovante
-de depósito) anexados a uma reserva.
+**submissão** e **revisão** de comprovantes de pagamento manual (ex.: PIX fora do gateway,
+comprovante de depósito) anexados a uma reserva.
 
 **Nota de nomenclatura importante:** apesar do prefixo de rota `transaction-history`, estes
 endpoints **não** expõem o log de auditoria interno de transações (`ITransactionHistory` /
 coleção `payment_transaction_history`, que registra os eventos de checkout/webhook e não é
-exposto por nenhuma rota pública hoje). Eles operam exclusivamente sobre
-**comprovantes de pagamento manual** — modelo `IManualPayment`, coleção `manual_payment_validations`
-— submetidos por clientes e revisados por administradores. Essa é uma inconsistência de nomenclatura
-pré-existente no código-fonte, preservada aqui apenas para documentar o comportamento real da API.
+exposto por nenhuma rota pública hoje). Eles operam sobre **comprovantes de pagamento manual**,
+que — desde a task 008 — são apenas uma **visão derivada da reserva** em
+`beach-center-bff-agendamentos` (não existe mais coleção própria). Inconsistência de nomenclatura
+pré-existente no código-fonte, preservada aqui só para documentar o comportamento real da API.
+
+> **Desacoplamento do upload (task 008 — US02):** o recebimento, a validação estática e o
+> armazenamento do arquivo do comprovante **saíram deste serviço**. `beach-center-bff-pagamentos`
+> agora só tem a **decisão** de aprovar/rejeitar (status lógico do pagamento) — o I/O de arquivo é
+> do novo `beach-center-bff-injection` (ver [`../beach-center-bff-injection/comprovante.md`](../beach-center-bff-injection/comprovante.md)).
+> A coleção `manual_payments`/`MongoManualPaymentRepositoryAdapter` e o storage no Google Drive
+> (`GoogleDriveFileStorageAdapter`) foram **removidos**. O front-end **não muda**: as mesmas duas
+> rotas de submissão continuam existindo aqui, mas agora são um **proxy fino** para o `injection`.
 
 ## Autenticação/autorização
-- `POST /api/v1/transaction-history`: `authMiddleware` (Bearer) — usuário autenticado deve ser o
-  **dono da reserva** (e-mail do token bate com o e-mail da reserva) para ser autorizado.
-- `POST /api/v1/public/transaction-history`: **pública**, sem `authMiddleware`. A autorização é
-  feita via `public_reserve_token` (token do link público de reserva), validado contra
-  `agendamentos` (`checkPublicLinkAuthorizationPort`).
+
+- `POST /api/v1/transaction-history`: `authMiddleware` (Bearer) — autentica o usuário e repassa
+  `usuario_id`/`requester_email` no proxy; **não** valida mais se é o dono da reserva (isso agora
+  é responsabilidade do `injection`).
+- `POST /api/v1/public/transaction-history`: **pública**, sem `authMiddleware`. Mesmo proxy, sem
+  contexto de usuário (o corpo precisa trazer `public_reserve_token`; a autorização é validada no
+  `injection`).
 - `GET /api/v1/transaction-history`, `GET /api/v1/transaction-history/:id`,
   `GET /api/v1/transaction-history/:id/proof`, `PATCH /api/v1/transaction-history/:id/review`:
   `authMiddleware` + `requireRole("ADMIN")` — apenas usuários com `user_type: "ADMIN"`.
@@ -26,92 +37,53 @@ pré-existente no código-fonte, preservada aqui apenas para documentar o compor
 ## Endpoints
 
 ### POST /api/v1/transaction-history
-Submete um comprovante de pagamento manual para uma reserva, autenticado via Bearer. Aciona
-`SubmitManualPaymentUsecase`. O usuário autenticado deve ser o dono da reserva (e-mail do token
-Firebase == e-mail da reserva).
 
-### POST /api/v1/public/transaction-history
-Mesmo controller/usecase do endpoint acima (`TransactionHistoryController.create`), mas sem
-`authMiddleware`. A autorização é feita via `public_reserve_token` (obrigatório no corpo neste
-fluxo, validado contra `GET {AGENDAMENTOS_API_URL}/links-reserva-publica/:token/reservas/:id/authorization`).
+**Proxy fino (task 008).** Repassa a requisição para
+`POST {INJECTION_API_URL}/agendamentos/comprovantes` no `beach-center-bff-injection`, com
+`x-api-key: INJECTION_INTERNAL_API_KEY`. Aciona `ForwardComprovanteUsecase` →
+`ForwardComprovanteAdapter`.
 
-Regras de negócio aplicadas pelo usecase (`domain/usecases/manual-payment/submit-manual-payment.usecase.ts`),
-comuns aos dois endpoints acima:
-1. A reserva (`reserve_id`) deve existir em `agendamentos`, senão `404`.
-2. A reserva deve estar `status: "pending"`, senão `409`.
-3. Autorização: `public_reserve_token` válido para a reserva **ou** e-mail do usuário autenticado
-   igual ao e-mail da reserva; caso contrário `403`.
-4. Não pode já existir comprovante para a mesma reserva (`existsByReserveId`), senão `409`.
-5. Conciliação de valores: `amount`, `duration_hours` e a lista de `slots` (por `id`) enviados
-   devem corresponder exatamente aos dados da reserva (`reserve.total`, `reserve.scheduling_id`,
-   mapeamento `duration_hours → amount` fixo `{1:80, 2:120, 3:160}`); qualquer divergência gera
-   `400`.
-6. **Transição de status (task 006a)**: após a validação e **antes** do upload, o usecase chama
-   `PATCH {AGENDAMENTOS_API_URL}/reservas/:id/status` com `waiting_approve`. É essa transição que
-   **gera o protocolo** (`number`) do lado de `agendamentos`. O `IReserve` retornado é usado
-   daí em diante — o `number` gerado vira o `prefix` do arquivo e o `reserve_number` do registro
-   `manual_payment` (o `reserve_number` enviado no corpo é ignorado na persistência).
-7. Upload do arquivo do comprovante via `IFileStoragePort`
-   (`google-drive-file-storage.adapter.ts`): se `GOOGLE_DRIVE_CLIENT_EMAIL`,
-   `GOOGLE_DRIVE_PRIVATE_KEY` e `GOOGLE_DRIVE_FOLDER_ID` estiverem todos configurados, o arquivo é
-   enviado ao Google Drive (`proof.storage: "google_drive"`, com `view_url`/`preview_url`);
-   caso contrário, o arquivo cai em modo `storage: "database"`, salvando o `base64` diretamente
-   no Mongo (`proof.data`).
-8. **Compensação em caso de falha**: se o upload do comprovante ou a persistência no banco
-   falharem, a reserva (já em `waiting_approve`) é automaticamente movida para `status: "rejected"`
-   (`updateReserveStatusPort.execute(activatedReserve, "rejected")`) antes de propagar o erro —
-   evita que a reserva fique presa em estado intermediário. Esse erro não tratado propaga como
-   `500` genérico.
+O controller (`TransactionHistoryController.create`) monta o contexto a partir da requisição
+autenticada e o repassa junto ao corpo:
+- `usuario_id` = `req.authUser.id_firestore` (uid do Firebase), quando autenticado.
+- `requester_email` = `req.authUser.email`, quando autenticado.
+
+**Nenhuma lógica de arquivo roda aqui** — o corpo (incluindo `proof_file.base64`) segue intacto
+para o `injection`, que faz toda a validação/upload/gravação/enfileiramento. A resposta HTTP
+(status e corpo) é a **mesma** que o `injection` devolveu — ver
+[`../beach-center-bff-injection/comprovante.md`](../beach-center-bff-injection/comprovante.md)
+para o contrato completo (corpo da requisição, regras de negócio, erros).
 
 **Parâmetros de path/query** — nenhum.
 
-**Corpo da requisição**
+**Corpo da requisição** — repassado como está para o `injection` (ver o documento dele); em
+resumo: `reserve_id`, `reserve_number`, `amount`, `duration_hours`, `user{name,email,phone}`,
+`slots[]`, `proof_file{file_name,mime_type,base64}`, `public_reserve_token?` (rota pública).
 
-| Campo | Tipo | Obrigatório | Descrição |
-|---|---|---|---|
-| `public_reserve_token` | string (32 chars) | Somente na rota pública | Token do link público de reserva |
-| `reserve_id` | string | Sim | Id da reserva em `agendamentos` |
-| `reserve_number` | string | Sim | Aceito pelo DTO, mas **ignorado na persistência** — o `reserve_number` gravado é o protocolo gerado na transição `→ waiting_approve` (task 006a). Pode ser enviado vazio/qualquer valor |
-| `amount` | number | Sim | Um de `80`, `120`, `160` (deve bater com a reserva) |
-| `duration_hours` | number | Sim | Um de `1`, `2`, `3` (deve bater com `scheduling_id.length` da reserva) |
-| `user.name` | string | Sim | Nome do cliente |
-| `user.email` | string (email) | Sim | E-mail do cliente |
-| `user.phone` | string | Sim | Telefone do cliente |
-| `slots` | array (1 a 3 itens) | Sim | Cada item: `id`, `date`, `start_time`, `end_time`, `court`, `unit` (todos string, obrigatórios) — `id` de cada slot deve bater com `scheduling_id` da reserva |
-| `proof_file.file_name` | string | Sim | Nome do arquivo |
-| `proof_file.mime_type` | string | Sim | Um de `image/jpeg`, `image/png`, `application/pdf` |
-| `proof_file.base64` | string | Sim | Conteúdo em base64, no máximo ~7.000.000 caracteres (≈ 5 MB, mensagem `"O comprovante deve ter no maximo 5 MB"`) |
-
-**Resposta de sucesso** — `201 Created`
+**Resposta de sucesso** — repassada do `injection`: `202 Accepted`
 ```json
 {
-  "message": "Comprovante enviado para validacao",
+  "message": "Comprovante recebido e em processamento",
   "data": {
-    "id": "665f1a2b3c4d5e6f7a8b9c10",
-    "reserve_id": "665f1a2b3c4d5e6f7a8b9c0d",
-    "reserve_number": "0348871290",
-    "amount": 80,
-    "duration_hours": 1,
-    "status": "pending",
-    "user": { "name": "Maria Silva", "email": "maria@example.com", "phone": "11999999999" },
-    "slots": [{ "id": "665f1a2b3c4d5e6f7a8b9c00", "date": "2026-09-10", "start_time": "18:00", "end_time": "19:00", "court": "Quadra 1", "unit": "Unidade Centro" }],
-    "proof": { "file_name": "0348871290-comprovante.png", "mime_type": "image/png", "storage": "database" },
-    "created_at": "2026-09-06T12:00:00.000Z",
-    "updated_at": "2026-09-06T12:00:00.000Z"
+    "agendamento_id": "665f1a2b3c4d5e6f7a8b9c0d",
+    "numero_protocolo": "0348871290",
+    "proof_key": "3f2c1a9e-....png",
+    "file_url": "http://localhost:9000/comprovantes/3f2c1a9e-....png",
+    "queued": true
   }
 }
 ```
 
-**Erros possíveis**
+**Erros possíveis** — repassados do `injection` (status HTTP e corpo idênticos):
 
 | Código HTTP | Causa |
 |---|---|
-| 400 | Corpo inválido (yup); ou `"Os dados do pagamento nao correspondem a reserva"` (divergência de valores/slots) |
-| 403 | `"Acesso negado para esta reserva"` — nem `public_reserve_token` nem e-mail do usuário autorizam |
-| 404 | `"Reserva nao encontrada"` |
-| 409 | `"A reserva nao esta pendente de pagamento"` (reserva já em `waiting_approve`/`approved`/`rejected`/`cancelled`/`expired`) ou `"Ja existe um comprovante para esta reserva"` |
-| 5xx | Falha ao mover a reserva para `waiting_approve` (ex.: `agendamentos` recusa por agendamento passado/conflito) — propagada; nenhum comprovante criado |
-| 500 | Falha no upload/persistência do comprovante (ex.: credenciais do Google Drive inválidas) — a reserva (já `waiting_approve`) é automaticamente rejeitada como compensação |
+| 400 | Corpo inválido, formato/tamanho do comprovante inválido, ou dados divergentes da reserva |
+| 401 / 403 | Falha de autenticação no `pagamentos` (Bearer inválido na rota privada); ou `403` do `injection` se nem e-mail nem `public_reserve_token` autorizam o acesso à reserva |
+| 404 | Reserva não encontrada |
+| 409 | Reserva não está `pending` |
+| 500 | Erro inesperado no proxy (ex.: `injection` fora do ar) |
+| 502 | `injection` recebeu mas falhou ao processar (upload/gravação/fila) — repassado |
 
 **Exemplo de chamada**
 ```bash
@@ -129,7 +101,16 @@ curl -X POST "http://localhost:5001/api/v1/transaction-history" \
   }'
 ```
 
-Chamada equivalente à rota pública (sem Bearer, com `public_reserve_token`):
+---
+
+### POST /api/v1/public/transaction-history
+
+Mesmo controller/usecase do endpoint acima (`TransactionHistoryController.create` →
+`ForwardComprovanteUsecase`), mas sem `authMiddleware` — não há `usuario_id`/`requester_email` no
+contexto repassado. A autorização é feita pelo `injection` via `public_reserve_token` (obrigatório
+no corpo neste fluxo).
+
+**Exemplo de chamada**
 ```bash
 curl -X POST "http://localhost:5001/api/v1/public/transaction-history" \
   -H "Content-Type: application/json" \
@@ -148,56 +129,73 @@ curl -X POST "http://localhost:5001/api/v1/public/transaction-history" \
 ---
 
 ### GET /api/v1/transaction-history
-Lista comprovantes de pagamento manual (ADMIN). Aciona `ListManualPaymentsUsecase`, que consulta
-`MongoManualPaymentRepositoryAdapter.list`, ordenado por `createdAt` decrescente e limitado a
-**200 registros**.
+
+Lista comprovantes para o painel de revisão do admin (ADMIN). **Task 008:** não lê mais uma
+coleção própria — aciona `ListManualPaymentsUsecase`, que chama
+`GET {AGENDAMENTOS_API_URL}/reservas?status=<status>[&name=<search>]` (padrão `status=waiting_approve`
+— o "pendente de revisão" real) e mapeia cada reserva para a **view de comprovante**
+(`toManualPaymentView`).
 
 **Parâmetros de path/query**
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `status` | string | Não | Filtra por `pending`, `approved` ou `rejected` |
-| `search` | string | Não | Busca (regex case-insensitive) em `reserve_id`, `reserve_number`, `user.name`, `user.email`, `user.phone` |
+| `status` | string | Não | `pending` \| `waiting_approve` \| `approved` \| `rejected`. Default: `waiting_approve` |
+| `search` | string | Não | Repassado como `name` na busca de reservas em `agendamentos` |
 
 **Resposta de sucesso** — `200 OK`
 ```json
 {
   "message": "Comprovantes listados com sucesso",
   "data": [
-    { "id": "665f1a2b3c4d5e6f7a8b9c10", "reserve_id": "665f1a2b3c4d5e6f7a8b9c0d", "status": "pending", "amount": 80, "duration_hours": 1, "...": "..." }
+    {
+      "id": "665f1a2b3c4d5e6f7a8b9c0d",
+      "reserve_id": "665f1a2b3c4d5e6f7a8b9c0d",
+      "reserve_number": "0348871290",
+      "amount": 80,
+      "duration_hours": 1,
+      "status": "waiting_approve",
+      "user": { "name": "Maria Silva", "email": "maria@example.com", "phone": "11999999999" },
+      "proof_url": "http://localhost:9000/comprovantes/3f2c1a9e-....png"
+    }
   ]
 }
 ```
+> `id` e `reserve_id` são o **id da reserva** (não existe mais um id de comprovante separado).
+> `proof_url` só aparece quando a reserva tem `proof_key`. `admin_note` (quando presente) vem do
+> campo `review_note` da reserva.
 
 **Erros possíveis**
 
 | Código HTTP | Causa |
 |---|---|
 | 401 | Sem `Authorization` ou token inválido/expirado |
-| 403 | Usuário autenticado não é `ADMIN` (`"Acesso negado"`) |
+| 403 | Usuário autenticado não é `ADMIN` |
 
 **Exemplo de chamada**
 ```bash
-curl "http://localhost:5001/api/v1/transaction-history?status=pending" \
+curl "http://localhost:5001/api/v1/transaction-history?status=waiting_approve" \
   -H "Authorization: Bearer <idToken ADMIN>"
 ```
 
 ---
 
 ### GET /api/v1/transaction-history/:id
-Retorna um comprovante específico por id (ADMIN). Aciona `ReadManualPaymentUsecase`.
+
+Retorna a view de comprovante de **uma reserva** por id (ADMIN). Aciona
+`ReadManualPaymentUsecase`, que lê `GET {AGENDAMENTOS_API_URL}/reservas/:id`.
 
 **Parâmetros de path/query**
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `id` | string (path) | Sim | Id (ObjectId) do comprovante |
+| `id` | string (path) | Sim | Id (ObjectId) **da reserva** em `agendamentos` |
 
 **Resposta de sucesso** — `200 OK`
 ```json
 {
   "message": "Comprovante encontrado com sucesso",
-  "data": { "id": "665f1a2b3c4d5e6f7a8b9c10", "reserve_id": "665f1a2b3c4d5e6f7a8b9c0d", "status": "pending", "...": "..." }
+  "data": { "id": "665f1a2b3c4d5e6f7a8b9c0d", "reserve_id": "665f1a2b3c4d5e6f7a8b9c0d", "status": "waiting_approve", "...": "..." }
 }
 ```
 
@@ -207,38 +205,30 @@ Retorna um comprovante específico por id (ADMIN). Aciona `ReadManualPaymentUsec
 |---|---|
 | 401 | Sem `Authorization` ou token inválido/expirado |
 | 403 | Usuário autenticado não é `ADMIN` |
-| 404 | `"Comprovante nao encontrado"` |
+| 404 | `"Comprovante nao encontrado"` — reserva inexistente |
 
 **Exemplo de chamada**
 ```bash
-curl "http://localhost:5001/api/v1/transaction-history/665f1a2b3c4d5e6f7a8b9c10" \
+curl "http://localhost:5001/api/v1/transaction-history/665f1a2b3c4d5e6f7a8b9c0d" \
   -H "Authorization: Bearer <idToken ADMIN>"
 ```
 
 ---
 
 ### GET /api/v1/transaction-history/:id/proof
-Faz o download/redirecionamento do arquivo do comprovante (ADMIN). Aciona
-`GetManualPaymentProofUsecase`.
 
-Comportamento por `proof.storage`:
-- `"google_drive"` (e `view_url` presente): responde `302` com `Location` = `proof.view_url`
-  (`res.redirect`).
-- `"database"`: decodifica `proof.data` (base64) e devolve os bytes do arquivo com
-  `Content-Type: <proof.mime_type>` (respeita o mime real do arquivo, ex.: `application/pdf`),
-  `Content-Disposition: inline; filename*=UTF-8''<nome codificado>` e
-  `Cache-Control: private, no-store`.
-- Se não houver `proof.data` disponível (nem Drive nem base64 salvo), responde `404` com
-  `{"message": "Arquivo do comprovante nao encontrado"}` — tratado diretamente no controller,
-  fora do `handleHttpError` padrão.
+Redireciona para o arquivo do comprovante (ADMIN). **Task 008:** não serve mais bytes do Mongo
+nem redireciona para o Google Drive — aciona `GetManualPaymentProofUsecase`, que monta a URL a
+partir de `reserve.proof_key` (`${MINIO_PUBLIC_URL}/${MINIO_BUCKET}/${proof_key}`) e responde
+`302`.
 
 **Parâmetros de path/query**
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `id` | string (path) | Sim | Id (ObjectId) do comprovante |
+| `id` | string (path) | Sim | Id (ObjectId) da reserva |
 
-**Resposta de sucesso** — `200 OK` (bytes do arquivo) ou `302` (redirect para o Google Drive)
+**Resposta de sucesso** — `302 Found`, `Location` = URL do objeto no MinIO.
 
 **Erros possíveis**
 
@@ -246,58 +236,57 @@ Comportamento por `proof.storage`:
 |---|---|
 | 401 | Sem `Authorization` ou token inválido/expirado |
 | 403 | Usuário autenticado não é `ADMIN` |
-| 404 | `"Comprovante nao encontrado"` (comprovante inexistente) ou `"Arquivo do comprovante nao encontrado"` (comprovante existe, mas sem dado de arquivo disponível) |
+| 404 | `"Comprovante nao encontrado"` (reserva inexistente) ou `"Arquivo do comprovante nao encontrado"` (reserva existe mas não tem `proof_key`) |
 
 **Exemplo de chamada**
 ```bash
-curl "http://localhost:5001/api/v1/transaction-history/665f1a2b3c4d5e6f7a8b9c10/proof" \
-  -H "Authorization: Bearer <idToken ADMIN>" \
-  --output comprovante
+curl -i "http://localhost:5001/api/v1/transaction-history/665f1a2b3c4d5e6f7a8b9c0d/proof" \
+  -H "Authorization: Bearer <idToken ADMIN>"
 ```
 
 ---
 
 ### PATCH /api/v1/transaction-history/:id/review
-Aprova ou rejeita um comprovante pendente (ADMIN). Aciona `ReviewManualPaymentUsecase`.
+
+Aprova ou rejeita o comprovante de uma reserva (ADMIN). Aciona `ReviewManualPaymentUsecase`.
 
 Regras de negócio:
 1. `status` do corpo deve ser exatamente `"approved"` ou `"rejected"`; qualquer outro valor gera
    `400` (`"Status de revisao invalido"`).
-2. O comprovante deve existir (`404` senão) e estar `status: "pending"` — se já revisado, `409`
-   (`"Este comprovante ja foi revisado"`).
-3. A reserva associada deve existir (`404` senão).
-4. Se a reserva **não** estiver `pending` nem `waiting_approve` e o status atual dela **divergir**
-   do `status` da revisão, retorna `409` (`"A reserva nao esta pendente de revisao"`) — proteção
-   contra revisar um comprovante cuja reserva mudou de estado por outro fluxo nesse meio-tempo.
-5. Se a reserva está `pending` **ou** `waiting_approve` (task 006a — o normal é `waiting_approve`,
-   já que o comprovante move a reserva para lá): quando aprovado, primeiro grava
-   `payment_method: "PIX"` na reserva (`PATCH .../reservas/:id/payment`) e depois
-   `PATCH .../reservas/:id/status` com o novo status (`approved` ou `rejected`).
-6. Persiste a revisão (`status`, `admin_note`, `reviewed_at`) no comprovante.
+2. A reserva (`id`) deve existir — `404` senão (`"Comprovante nao encontrado"`).
+3. Se a reserva **não** estiver `pending`/`waiting_approve` e o status atual dela **divergir** do
+   `status` da revisão, `409` (`"Este comprovante ja foi revisado"`) — idempotência/proteção
+   contra revisão dupla.
+4. Se a reserva está `pending` ou `waiting_approve` (o normal é `waiting_approve`): quando
+   `approved`, grava `payment_method: "PIX"` (+ `review_note`, se enviado) via
+   `PATCH .../reservas/:id/payment`, depois `PATCH .../reservas/:id/status` com o novo status.
+   Quando `rejected`, só o `review_note` (se enviado) + a transição de status.
+5. **Task 008:** não escreve mais em `manual_payments` (coleção descontinuada) — `admin_note` é
+   persistido em `reserve.review_note`.
 
 **Parâmetros de path/query**
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `id` | string (path) | Sim | Id (ObjectId) do comprovante |
+| `id` | string (path) | Sim | Id (ObjectId) da reserva |
 
 **Corpo da requisição**
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `status` | string | Sim | `"approved"` ou `"rejected"` |
-| `admin_note` | string | Não | Observação do administrador (ex.: motivo da rejeição) |
+| `admin_note` | string | Não | Observação do administrador — gravada em `reserve.review_note` |
 
 **Resposta de sucesso** — `200 OK`
 ```json
 {
   "message": "Comprovante revisado com sucesso",
   "data": {
-    "id": "665f1a2b3c4d5e6f7a8b9c10",
+    "id": "665f1a2b3c4d5e6f7a8b9c0d",
+    "reserve_id": "665f1a2b3c4d5e6f7a8b9c0d",
     "status": "approved",
-    "admin_note": null,
-    "reviewed_at": "2026-09-06T13:00:00.000Z",
-    "...": "..."
+    "user": { "name": "Maria Silva", "email": "maria@example.com", "phone": "11999999999" },
+    "proof_url": "http://localhost:9000/comprovantes/3f2c1a9e-....png"
   }
 }
 ```
@@ -309,23 +298,31 @@ Regras de negócio:
 | 400 | `"Status de revisao invalido"` |
 | 401 | Sem `Authorization` ou token inválido/expirado |
 | 403 | Usuário autenticado não é `ADMIN` |
-| 404 | `"Comprovante nao encontrado"` ou `"Reserva nao encontrada"` |
-| 409 | `"Este comprovante ja foi revisado"` ou `"A reserva nao esta pendente de revisao"` |
+| 404 | `"Comprovante nao encontrado"` — reserva inexistente |
+| 409 | `"Este comprovante ja foi revisado"` |
 
 **Exemplo de chamada**
 ```bash
-curl -X PATCH "http://localhost:5001/api/v1/transaction-history/665f1a2b3c4d5e6f7a8b9c10/review" \
+curl -X PATCH "http://localhost:5001/api/v1/transaction-history/665f1a2b3c4d5e6f7a8b9c0d/review" \
   -H "Authorization: Bearer <idToken ADMIN>" \
   -H "Content-Type: application/json" \
   -d '{"status": "approved"}'
 ```
 
 ## Referências
+
 - Rota: `services/beach-center-bff-pagamentos/src/applications/routes/routes.ts`
 - Controller: `services/beach-center-bff-pagamentos/src/applications/controllers/transaction-history/transaction-history.controller.ts`
-- DTO: `services/beach-center-bff-pagamentos/src/applications/dto/create-manual-payment.dto.ts`
-- Usecases: `services/beach-center-bff-pagamentos/src/domain/usecases/manual-payment/submit-manual-payment.usecase.ts`, `.../query-manual-payments.usecase.ts`, `.../review-manual-payment.usecase.ts`
-- Repositório: `services/beach-center-bff-pagamentos/src/infra/adapters/manual-payment/mongo-manual-payment-repository.adapter.ts`
-- Armazenamento de arquivo: `services/beach-center-bff-pagamentos/src/infra/adapters/file-storage/google-drive-file-storage.adapter.ts`
-- Modelos: `services/beach-center-bff-pagamentos/src/domain/models/manual-payment.model.ts`
+- Usecases: `.../domain/usecases/manual-payment/forward-comprovante.usecase.ts` (proxy — task 008), `.../query-manual-payments.usecase.ts` (`ListManualPaymentsUsecase`, `ReadManualPaymentUsecase`, `GetManualPaymentProofUsecase` — fonte: `agendamentos`), `.../review-manual-payment.usecase.ts`
+- Client do injection: `.../domain/ports/output/injection-client.port.ts`, `.../infra/adapters/injection/forward-comprovante.adapter.ts`
+- Client do agendamentos (revisão): `.../domain/ports/output/reserve.port.ts` (`IListReservesForReviewPort`), `.../infra/adapters/reserve/list-reserves-for-review.adapter.ts`, `.../infra/adapters/reserve/read-reserve.adapter.ts`
+- Modelo: `services/beach-center-bff-pagamentos/src/domain/models/manual-payment.model.ts` (`IManualPaymentView` — view derivada da reserva, task 008)
 - Middleware de auth: `services/beach-center-bff-pagamentos/src/applications/middlewares/auth.middleware.ts` (`authMiddleware`, `requireRole`)
+- Env (task 008): `INJECTION_API_URL`, `INJECTION_INTERNAL_API_KEY`, `MINIO_PUBLIC_URL`, `MINIO_BUCKET` (`src/config/env.ts`)
+- Serviço de upload (task 008): [`../beach-center-bff-injection/comprovante.md`](../beach-center-bff-injection/comprovante.md)
+- Reserva (dono do dado, task 008): [`../beach-center-bff-agendamentos/reserva.md`](../beach-center-bff-agendamentos/reserva.md) (`proof_key`, `review_note` em `PATCH /reservas/:id/payment`)
+
+**Removido nesta task:** `IFileStoragePort`/`GoogleDriveFileStorageAdapter`,
+`IManualPaymentRepositoryPort`/`MongoManualPaymentRepositoryAdapter`,
+`SubmitManualPaymentUsecase`, `create-manual-payment.dto.ts`, schema `manual-payment.schema.ts`
+(coleção `manual_payments`), env `googleDrive.*`.

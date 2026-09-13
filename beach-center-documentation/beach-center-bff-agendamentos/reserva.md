@@ -20,13 +20,15 @@ qualquer estado não-terminal  ──────→  cancelled
 - `rejected` / `cancelled` / `expired` — terminais; **liberam** os agendamentos (se nada mais os bloquear).
 - `expired` — a varredura lazy do `GET /reservas` marca assim toda reserva `pending` com mais de 24 h de `createdAt` sem comprovante.
 
-**Nota de integração cross-serviço:** três destes endpoints não são consumidos pelo frontend, e sim pelo **beach-center-bff-pagamentos**, autenticando-se com uma chave interna (`x-api-key`) em vez de um usuário Firebase:
+**Nota de integração cross-serviço:** três destes endpoints não são consumidos pelo frontend, e sim por **`beach-center-bff-pagamentos`** e, desde a task 008, também por **`beach-center-bff-injection`**, autenticando-se com uma chave interna (`x-api-key`) em vez de um usuário Firebase:
 
-- `PATCH /reservas/:id/payment` — `pagamentos` grava aqui os metadados do pagamento (`payment_id`, `checkout_id`, `payment_method`) após um checkout ou webhook Getnet.
-- `PATCH /reservas/:id/status` — chamado por `pagamentos` no envio do comprovante (`pending → waiting_approve`) e na revisão do admin (`waiting_approve → approved/rejected`); também pelo webhook Getnet. Bloqueia/libera os agendamentos vinculados.
-- `GET /reservas/:id` — `pagamentos` lê os dados da reserva durante o checkout/comprovante, sem Bearer, só com `x-api-key`.
+- `PATCH /reservas/:id/payment` — `pagamentos` grava aqui os metadados do pagamento (`payment_id`, `checkout_id`, `payment_method`) após um checkout ou webhook Getnet, e o `review_note` na revisão do admin; `injection` grava aqui o `proof_key` (object key do comprovante no MinIO) logo após o upload (task 008).
+- `PATCH /reservas/:id/status` — chamado por `injection` no envio do comprovante (`pending → waiting_approve`, task 008 — antes era `pagamentos` quem fazia essa chamada) e por `pagamentos` na revisão do admin (`waiting_approve → approved/rejected`); também pelo webhook Getnet. Bloqueia/libera os agendamentos vinculados.
+- `GET /reservas/:id` — lido por `pagamentos` (checkout, painel de revisão) e por `injection` (valida a reserva antes do upload), sem Bearer, só com `x-api-key`.
 
 > **Reembolso automático removido (task 006a):** `agendamentos` **não chama mais** `beach-center-bff-pagamentos`. Ao cancelar uma reserva `approved` com valor, apenas grava `refund_status: "manual"` — a devolução do valor é tratada por contato direto entre usuário e admin.
+
+> **Upload de comprovante desacoplado (task 008):** o recebimento/validação/armazenamento do arquivo de comprovante saiu de `beach-center-bff-pagamentos` para o novo `beach-center-bff-injection` (ver [`../beach-center-bff-injection/comprovante.md`](../beach-center-bff-injection/comprovante.md)). O `pagamentos` virou um proxy fino para essas duas chamadas de escrita — ver [`../beach-center-bff-pagamentos/comprovante-pagamento.md`](../beach-center-bff-pagamentos/comprovante-pagamento.md).
 
 > **Fluxo público por protocolo (task 006b):** além de consultar e cancelar, o cliente pode **reagendar** a reserva pelo protocolo (`PATCH /reservas/protocol/:number/reagendar`). Cancelamento e reagendamento só existem **a partir de `waiting_approve`** — enquanto a reserva está `pending` (sem comprovante), os três endpoints `protocol/*` respondem `404`. Ambos respeitam a **janela de 2 h** antes do agendamento mais cedo. Ao cancelar/reagendar uma reserva `approved`, `agendamentos` dispara uma notificação **não-bloqueante** por WhatsApp (`beach-center-whatsapp`, `POST /messages/send-by-key`) — uma falha de envio nunca reverte a operação já persistida.
 
@@ -298,7 +300,7 @@ curl -X PATCH "https://<host>/api/v1/reservas/protocol/1234567890/reagendar" \
 
 ### PATCH /api/v1/reservas/:id/payment
 
-**Consumido por `beach-center-bff-pagamentos`.** Atualiza os metadados de pagamento de uma reserva (chamado após checkout / webhook Getnet, e no review manual para gravar `payment_method: "PIX"`). Aciona `UpdateReservePaymentMetadataUsecase`, que apenas valida o `id` e delega à persistência — não há regra de negócio adicional. Os campos `refund_*` continuam aceitos pelo DTO por compatibilidade, mas o fluxo de reembolso automático foi removido (task 006a).
+**Consumido por `beach-center-bff-pagamentos` e, desde a task 008, por `beach-center-bff-injection`.** Atualiza os metadados de pagamento de uma reserva (chamado após checkout / webhook Getnet; pelo `injection` logo após subir o comprovante ao MinIO, gravando `proof_key`; pelo `pagamentos` no review manual, para gravar `payment_method: "PIX"` e/ou `review_note`). Aciona `UpdateReservePaymentMetadataUsecase`, que apenas valida o `id` e delega à persistência — não há regra de negócio adicional. Os campos `refund_*` continuam aceitos pelo DTO por compatibilidade, mas o fluxo de reembolso automático foi removido (task 006a).
 
 **Parâmetros de path**
 
@@ -316,6 +318,8 @@ curl -X PATCH "https://<host>/api/v1/reservas/protocol/1234567890/reagendar" \
 | `refund_id` | string | Não | (legado) Identificador do estorno |
 | `refund_status` | string | Não | (legado) `"pending"` \| `"approved"` \| `"failed"` \| `"skipped"` \| `"manual"` |
 | `refunded_at` | string (data) | Não | (legado) Data/hora do estorno |
+| `proof_key` | string | Não | **(task 008)** Object key do comprovante no bucket MinIO (ex.: `"3f2c1a9e-....png"`), gravado pelo `beach-center-bff-injection` logo após o upload. Máx. 255 caracteres |
+| `review_note` | string | Não | **(task 008)** Observação do admin ao aprovar/rejeitar o comprovante (antes vivia na coleção `manual_payments`, hoje descontinuada). Máx. 500 caracteres |
 
 **Resposta de sucesso**
 
@@ -536,7 +540,7 @@ curl -X PATCH "https://<host>/api/v1/reservas/665f1a2b3c4d5e6f7a8b9c0d" \
 
 ### PATCH /api/v1/reservas/:id/status
 
-**Consumido por `beach-center-bff-pagamentos`.** É a rota por onde `pagamentos` transiciona o status da reserva: `SubmitManualPaymentUsecase` chama com `waiting_approve` ao receber o comprovante; `ReviewManualPaymentUsecase` chama com `approved`/`rejected` na revisão do admin; o webhook Getnet também a usa. Também acessível a ADMIN via Bearer. Aciona `UpdateReserveAndSchedulingStatusUsecase`:
+**Consumido por `beach-center-bff-injection` e `beach-center-bff-pagamentos`.** É a rota por onde a reserva transiciona de status: **`beach-center-bff-injection`** chama com `waiting_approve` ao concluir o upload do comprovante (`InjectComprovanteUsecase` — task 008, antes era o `pagamentos` quem fazia essa chamada); **`pagamentos`** chama com `approved`/`rejected` na revisão do admin (`ReviewManualPaymentUsecase`); o webhook Getnet também a usa. Também acessível a ADMIN via Bearer. Aciona `UpdateReserveAndSchedulingStatusUsecase`:
 
 - Revalida os horários vinculados quando o novo status **bloqueia** (`pending`/`waiting_approve`/`approved`): existência, data não passada, sem conflito de evento, e — se a reserva vinha de um terminal que libera (`cancelled`/`rejected`/`expired`) — disponibilidade.
 - **Na transição `→ waiting_approve`**, se a reserva ainda não tem `number`, **gera o protocolo** (10 dígitos, `nanoid`) com unicidade global (consulta `reservas.number` + `ranking_agendamentos.numero_protocolo` via `IIsProtocolNumberTakenPort`) e persiste. É idempotente: se já há `number`, não regenera.
@@ -602,6 +606,7 @@ curl -X PATCH "https://<host>/api/v1/reservas/665f1a2b3c4d5e6f7a8b9c0d/status" \
 - WhatsApp (task 006b): `src/domain/ports/output/whatsapp-notification.port.ts`, `src/infra/adapters/whatsapp/send-whatsapp-notification.adapter.ts` (`POST {WHATSAPP_API_URL}/messages/send-by-key`, `x-api-key`; **nunca lança**), env `WHATSAPP_API_URL` / `WHATSAPP_INTERNAL_API_KEY` (`src/config/env.ts`)
 - Expiração lazy: `src/infra/adapters/reserva/list-pending-older-than/list-pending-reserves-older-than.adapter.ts`
 - DTOs: `src/applications/dto/create-reserva.dto.ts`, `update-reserva.dto.ts`, `update-payment-metadata.dto.ts`, `update-status.dto.ts`, `find-by-protocol.dto.ts`, `cancel-by-protocol.dto.ts`, `reschedule-by-protocol.dto.ts`, `reserva-equipment.mapper.ts`
-- Modelo: `src/domain/models/reserva.model.ts`
+- Modelo: `src/domain/models/reserva.model.ts` (`proof_key?`, `review_note?` — task 008)
 - Erros de domínio: `src/domain/errors.ts`
 - Consumidor externo do WhatsApp: [`../beach-center-whatsapp/mensagem.md`](../beach-center-whatsapp/mensagem.md)
+- Consumidores externos do upload de comprovante (task 008): [`../beach-center-bff-injection/comprovante.md`](../beach-center-bff-injection/comprovante.md), [`../beach-center-bff-pagamentos/comprovante-pagamento.md`](../beach-center-bff-pagamentos/comprovante-pagamento.md)
